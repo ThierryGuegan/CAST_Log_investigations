@@ -365,7 +365,13 @@ class AddRunChecks(unittest.TestCase):
         code, body = req("POST", "/api/folder/check", {"path": '"{}"'.format(folder)})   # quotes from "Copy as path"
         self.assertEqual(code, 200, body)
         self.assertEqual((body["logs"], body["runs_found"], body["name"]), (2, ["0-analyze.log"], "check_folder"))
+        self.assertEqual(body["bytes"], sum(p.stat().st_size for p in folder.iterdir()))
         self.assertEqual(len(req("GET", "/api/runs")[1]), before)
+
+    def test_limits_are_published_for_the_page(self):
+        code, body = req("GET", "/api/limits")
+        self.assertEqual(code, 200)
+        self.assertEqual(body, {"max_upload": SRV.max_upload, "max_extract": SRV.max_extract})
 
     def test_folder_check_errors_and_header(self):
         empty = Path(TMP) / "check_empty"
