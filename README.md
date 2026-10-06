@@ -11,6 +11,7 @@ You need Python 3.8 or later; nothing else is installed.
 ```bash
 python3 server.py          # Linux / macOS
 py server.py               # Windows
+run_gui.bat                # Windows: double-click it instead
 ```
 
 The browser opens at `http://127.0.0.1:8765/`. Stop the server with Ctrl+C.
