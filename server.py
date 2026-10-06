@@ -64,13 +64,30 @@ def phase_folder_name(zip_name):
     return stem or "archive"
 
 
-def extract_archive(zip_path, input_dir, max_depth=3):
+class ExtractLimit(ValueError):
+    pass
+
+
+def _reserve(zf, budget):
+    """Check the declared uncompressed size BEFORE extracting: a small archive can expand to
+    gigabytes (decompression bomb), and nested zips multiply it."""
+    need = sum(i.file_size for i in zf.infolist())
+    if need > budget[0]:
+        raise ExtractLimit("Unpacking would need {:.1f} GB, more than the {:.1f} GB left in the extraction limit. "
+                           "Start the server with a higher --max-extract-gb if this archive is genuine."
+                           .format(need / 1024 ** 3, budget[0] / 1024 ** 3))
+    budget[0] -= need
+
+
+def extract_archive(zip_path, input_dir, max_depth=3, max_bytes=20 * 1024 ** 3):
     """Extract an uploaded archive. Inner zips that contain logs (one zip per phase, as in CAST 8.3
     exports) are each extracted into their own folder named after the phase, never all into one
     folder: several phases contain files with the same name."""
     input_dir.mkdir(parents=True, exist_ok=True)
+    budget = [max_bytes]                    # shared by the archive and every nested zip
     with zipfile.ZipFile(zip_path) as zf:
         _check_members(zf, input_dir)
+        _reserve(zf, budget)
         zf.extractall(input_dir)
     for _ in range(max_depth):
         inner = [p for p in input_dir.rglob("*.zip") if p.is_file()]
@@ -88,6 +105,7 @@ def extract_archive(zip_path, input_dir, max_depth=3):
                         target = z.parent / "{}_{}".format(phase_folder_name(z.name), n)
                         n += 1
                     _check_members(zf, target)
+                    _reserve(zf, budget)
                     zf.extractall(target)
             except zipfile.BadZipFile:
                 continue
@@ -118,6 +136,8 @@ class Workspace(object):
 
     def save_meta(self, run_id, meta):
         d = self.root / run_id
+        if not d.is_dir():                  # deleted meanwhile: never recreate it
+            return
         tmp = d / "meta.json.tmp"
         tmp.write_text(json.dumps(meta, indent=2), encoding="utf-8")
         os.replace(str(tmp), str(d / "meta.json"))
@@ -154,8 +174,11 @@ class Workspace(object):
                             "state": meta["job"]["state"], "status": status})
         return out
 
-    def delete(self, run_id):
-        shutil.rmtree(str(self.run_dir(run_id)))
+    def delete(self, run_id, force=False):
+        d = self.run_dir(run_id)
+        if not force and self.meta(run_id)["job"].get("state") == "running":
+            raise RuntimeError("This run is being analysed. Wait for the analysis to finish, then delete it.")
+        shutil.rmtree(str(d))
 
     # ---- analysis
     def script_args(self, options):
@@ -173,6 +196,9 @@ class Workspace(object):
             raise RuntimeError("An analysis is already running for this run.")
         meta["options"] = options
         meta["job"] = {"state": "running", "started": time.time(), "steps": []}
+        shared = self.run_dir(run_id) / "Output" / "triggers.shared.json"
+        if shared.is_file() and not (options.get("redact") or options.get("redact_terms")):
+            shared.unlink()                 # left from an earlier masked analysis: now out of date
         self.save_meta(run_id, meta)
         threading.Thread(target=self._analyse, args=(run_id, options), daemon=True).start()
 
@@ -348,7 +374,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._upload()
             if parts == ["api", "folder"]:
                 body = self._json_body()
-                folder = Path(body.get("path", "")).expanduser()
+                # Windows "Copy as path" wraps the path in double quotes
+                folder = Path(str(body.get("path", "")).strip().strip('"').strip("'").strip()).expanduser()
                 if not folder.is_dir():
                     return self._error(400, "Folder not found: {}".format(folder))
                 logs = [p for p in folder.rglob("*.log") if p.is_file()]
@@ -405,6 +432,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._error(404, "Unknown address.")
         except KeyError:
             return self._error(404, "No such run.")
+        except RuntimeError as e:
+            return self._error(409, str(e))
 
     # ---- endpoints
     def _options(self, body):
@@ -443,12 +472,12 @@ class Handler(BaseHTTPRequestHandler):
                 return self._error(400, "That file is not a zip archive.")
             meta = ws.new_run(self.headers.get("X-Run-Name") or phase_folder_name(Path(name).name))
             try:
-                nlogs, runs = extract_archive(Path(tmp), Path(meta["input"]))
+                nlogs, runs = extract_archive(Path(tmp), Path(meta["input"]), max_bytes=self.server.max_extract)
             except ValueError as e:
-                ws.delete(meta["id"])
+                ws.delete(meta["id"], force=True)
                 return self._error(400, str(e))
             if nlogs == 0:
-                ws.delete(meta["id"])
+                ws.delete(meta["id"], force=True)
                 return self._error(400, "The archive contains no .log file.")
             return self._send(200, {"run": meta, "logs": nlogs, "runs_found": runs})
         finally:
@@ -456,10 +485,11 @@ class Handler(BaseHTTPRequestHandler):
                 os.unlink(tmp)
 
 
-def make_server(port, workspace, skills_dir=None, max_upload_gb=4):
+def make_server(port, workspace, skills_dir=None, max_upload_gb=4, max_extract_gb=20):
     srv = ThreadingHTTPServer(("127.0.0.1", port), Handler)
     srv.ws = Workspace(workspace, find_scripts(skills_dir))
     srv.max_upload = int(max_upload_gb * 1024 ** 3)
+    srv.max_extract = int(max_extract_gb * 1024 ** 3)
     return srv
 
 
@@ -468,10 +498,12 @@ def main():
     ap.add_argument("--port", type=int, default=8765)
     ap.add_argument("--workspace", default=str(HERE / "workspace"), help="where runs and reports are kept")
     ap.add_argument("--skills-dir", help="folder containing analyze-logs/ and analyze-tracebacks/")
-    ap.add_argument("--max-upload-gb", type=float, default=4)
+    ap.add_argument("--max-upload-gb", type=float, default=4, help="largest archive accepted")
+    ap.add_argument("--max-extract-gb", type=float, default=20,
+                    help="largest total size an archive may unpack to, nested zips included")
     ap.add_argument("--no-browser", action="store_true")
     args = ap.parse_args()
-    srv = make_server(args.port, args.workspace, args.skills_dir, args.max_upload_gb)
+    srv = make_server(args.port, args.workspace, args.skills_dir, args.max_upload_gb, args.max_extract_gb)
     url = "http://127.0.0.1:{}/".format(srv.server_address[1])
     print("CAST run inspector: {}  (workspace: {})".format(url, srv.ws.root))
     print("Skills: {}".format(srv.ws.logs_script.parent.parent.parent))

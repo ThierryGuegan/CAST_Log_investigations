@@ -214,11 +214,11 @@ TypeError: bad
 class Warnings(unittest.TestCase):
     def test_grouping(self):
         lines = []
-        for pkg, ver in [("Amr.Bus", "2.0.1"), ("Amr.Bus.RabbitMQ", "2.0.1"), ("FakeItEasy", "7.3.1"),
-                         ("RemoteReadingSystem.Contracts.Metering", "1.0.0.0")]:
+        for pkg, ver in [("Acme.Bus", "2.0.1"), ("Acme.Bus.RabbitMQ", "2.0.1"), ("FakeItEasy", "7.3.1"),
+                         ("Acme.Contracts.Metering", "1.0.0.0")]:
             lines.append("2026-10-01 20:54:00 [WARNING] DOTNET.0142:No ressource found for nuget package "
                          f"{pkg} version {ver}. The corresponding package reference of project /opt/x/A.csproj")
-        for name in ("Amr", "RabbitConnector", "System.Runtime"):
+        for name in ("Acme", "QueueConnector", "System.Runtime"):
             lines.append(f"2026-10-01 20:54:01 [WARNING] DOTNET.0150:No definition found for the name '{name}'. "
                          "Therefore no link will be drawn to that object.")
         lines.append("2026-10-01 20:54:02 [ERROR] Something broke")
@@ -408,14 +408,14 @@ ValueError: bad
         self.assertLess(time.perf_counter() - t, 20)
 
     def test_mask_mode(self):
-        line = '2026-10-01 20:53:00 [INFO] connectPassword="CRYPTED:CAA9FB4" host db01.suez-eau.fr\n'
+        line = '2026-10-01 20:53:00 [INFO] connectPassword="CRYPTED:CAA9FB4" host db01.example-corp.fr\n'
         r = subprocess.run([sys.executable, str(SCRIPT), "--mask"], input=line, capture_output=True, text=True)
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertNotIn("CAA9FB4", r.stdout)
-        self.assertIn("db01.suez-eau.fr", r.stdout)
+        self.assertIn("db01.example-corp.fr", r.stdout)
         r = subprocess.run([sys.executable, str(SCRIPT), "--mask", "--redact"], input=line,
                            capture_output=True, text=True)
-        self.assertNotIn("suez-eau", r.stdout)
+        self.assertNotIn("example-corp", r.stdout)
 
 
 def markdown_problems(md):
@@ -444,7 +444,7 @@ class Round6(unittest.TestCase):
   File "{x}", line 1713, in save_links
     create_link('callLink', a)
 KeyError: '__name__' in List<string>
-2026-10-01 20:00:01 [WARNING] DOTNET.0142:No ressource found for nuget package Amr.Bus version 2.0.1. The corresponding package reference of project /opt/x/A.csproj
+2026-10-01 20:00:01 [WARNING] DOTNET.0142:No ressource found for nuget package Acme.Bus version 2.0.1. The corresponding package reference of project /opt/x/A.csproj
 2026-10-01 20:00:02 [WARNING] value <<hidden value>> for *_Dataset*.xml
 """
         for args in ((), ("--redact",)):
@@ -748,7 +748,7 @@ class RealRuns(unittest.TestCase):
     def test_lowercase_nuget_ids_stay_in_their_group(self):
         g = self._patterns(["DOTNET.0142:No ressource found for nuget package %s version 1.2.3. The corresponding "
                             "package reference of project /src/A.csproj will be ignored" % n
-                            for n in ("Amr.Bus", "NLog.Extensions.Logging", "xunit", "moq")])
+                            for n in ("Acme.Bus", "NLog.Extensions.Logging", "xunit", "moq")])
         self.assertEqual(len(g), 1)
         self.assertIn("package or type", self._patterns(["JAVA124:Cannot resolve 'X' as package or type in "
                                                          "package 'a' from package 'b': /src/A.java"])[0]["template"])
@@ -837,12 +837,12 @@ import hashlib as _hashlib
 import importlib.util as _ilu
 
 SHARED_BLOCK_SHA = "7568b60f3fc4204d"   # update in BOTH skills when the shared block changes
-REDACTION_SAMPLE = (r"-password Hunter2 --password baps --pwd=x1 Authorization: Bearer eyJabc.def "
-                    r"password=S3c; Unexpected token: '}' api_key=K9 host db01.suez-eau.fr "
-                    r"unc \\fileserver01\share\ACME\App.cs Connection string: LIBPQ:pgprod-bidc01:5432,castdb "
+REDACTION_SAMPLE = (r"-password Hunter2 --password tiger7 --pwd=x1 Authorization: Bearer eyJabc.def "
+                    r"password=S3c; Unexpected token: '}' api_key=K9 host db01.example-corp.fr "
+                    r"unc \\fileserver01\share\ACME\App.cs Connection string: LIBPQ:pgprod-db01:5432,castdb "
                     r"Server=sql01;Database=x jdbc:postgresql://dbhost:5432/cast https://doc.castsoftware.com/x "
                     r"System.IO version 1.0.0.0 at 10.1.2.3 /usr/share/CAST/Extensions/x.py "
-                    r"/opt/cast/upload/BAPS/A.cs C:\Users\jdoe\src\B.cs "
+                    r"/opt/cast/upload/APP1/A.cs C:\Users\jdoe\src\B.cs "
                     # round 4: quoted / JSON / XML / env-style / camelCase / YAML / CAST-encrypted
                     r"password=\"my secret\" '\"password\": \"jsonpw\"' <password>xmlpw</password> "
                     r"DB_PASSWORD=envpw PGPASSWORD=pgpw CAST_TOKEN=tok7 secret_key: yamlpw "
@@ -851,8 +851,8 @@ REDACTION_SAMPLE = (r"-password Hunter2 --password baps --pwd=x1 Authorization: 
                     r"[mscorlib]System.Security.Cryptography.PasswordDeriveBytes.+ctor(x) "
                     r"System.IdentityModel.Tokens.Jwt.JwtPayload Token(Token.Generic,'Uri',1,2) "
                     r"closing dn-sendcredentials Culture=neutral, PublicKeyToken=b77a5c561934e089")
-MUST_GO = ["Hunter2", "baps", "x1", "eyJabc", "S3c", "K9", "suez-eau", "fileserver01", "ACME",
-           "pgprod-bidc01", "sql01", "dbhost", "10.1.2.3", "/opt/cast", "jdoe",
+MUST_GO = ["Hunter2", "tiger7", "x1", "eyJabc", "S3c", "K9", "example-corp", "fileserver01", "ACME",
+           "pgprod-db01", "sql01", "dbhost", "10.1.2.3", "/opt/cast", "jdoe",
            "my secret", "jsonpw", "xmlpw", "envpw", "pgpw", "tok7", "yamlpw", "CAA9FB4", ";cd",
            "castadm", "sqluser"]
 MUST_STAY = ["Unexpected token: '}'", "doc.castsoftware.com", "System.IO", "version 1.0.0.0",
@@ -884,10 +884,10 @@ class SharedRedaction(unittest.TestCase):
         for s in MUST_STAY:
             self.assertIn(s, out)
         secrets_only = m.mask_secrets(REDACTION_SAMPLE)          # without --redact
-        for s in ["Hunter2", "baps", "eyJabc", "S3c", "K9", "my secret", "jsonpw", "xmlpw", "envpw",
+        for s in ["Hunter2", "tiger7", "eyJabc", "S3c", "K9", "my secret", "jsonpw", "xmlpw", "envpw",
                   "pgpw", "tok7", "yamlpw", "CAA9FB4", ";cd"]:
             self.assertNotIn(s, secrets_only)
-        self.assertIn("suez-eau.fr", secrets_only)               # hosts only masked with --redact
+        self.assertIn("example-corp.fr", secrets_only)               # hosts only masked with --redact
         self.assertIn("castadm", secrets_only)                   # user names only with --redact
 
     def test_terms_never_mangle_placeholders(self):
@@ -961,10 +961,10 @@ class SharedRedaction(unittest.TestCase):
 
     def test_private_hosts_with_ports(self):
         m = _load_script()
-        cases = {"acme_mngt on CastStorageService _ dbsrv02.lan.itr.acme:5432": "acme_mngt on CastStorageService _ <host>:5432",
-                 "-CONNECT_LOCAL('PostgreSQL','//dbsrv02.lan.itr.acme:5432/postgres')": "-CONNECT_LOCAL('PostgreSQL','//<host>:5432/postgres')",
-                 "jdbc:postgresql://dbsrv02.lan.itr.acme:5432/db": "jdbc:postgresql://<host>:5432/db",
-                 "connect to dbsrv02.lan.itr.acme:5432 failed": "connect to <host>:5432 failed"}
+        cases = {"acme_mngt on CastStorageService _ dbsrv02.lan.corp.acme:5432": "acme_mngt on CastStorageService _ <host>:5432",
+                 "-CONNECT_LOCAL('PostgreSQL','//dbsrv02.lan.corp.acme:5432/postgres')": "-CONNECT_LOCAL('PostgreSQL','//<host>:5432/postgres')",
+                 "jdbc:postgresql://dbsrv02.lan.corp.acme:5432/db": "jdbc:postgresql://<host>:5432/db",
+                 "connect to dbsrv02.lan.corp.acme:5432 failed": "connect to <host>:5432 failed"}
         for src, want in cases.items():
             self.assertEqual(m.redact_text(src, [], True), want)
         for keep in ("analyser.py:492", "formsreport_symbols/__init__.py:1713", "com.acme.billing.Foo:12"):

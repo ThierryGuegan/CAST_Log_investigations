@@ -147,6 +147,29 @@ async function loadRuns(selectId) {
   else if (!S.current) S.runs.length ? openRun(S.runs[0].id) : showAdd();
 }
 
+/* ---------------------------------------------------------------- analysis options (shared) */
+function optionsHTML(o) {
+  o = o || {}; const terms = (o.redact_terms || []).join(", ");
+  return `<fieldset><legend>Privacy</legend>
+      <div class="check"><input type="checkbox" id="redact" ${o.redact ? "checked" : ""}><label for="redact" style="margin:0">Mask hosts, IP addresses, user names and customer paths</label></div>
+      <label for="terms">Names to mask, separated by commas (customer, project, company)</label>
+      <input type="text" id="terms" placeholder="acme, projectX" value="${esc(terms)}">
+      <p class="note">Credentials are always masked. Masking is needed before sharing a report outside the company.</p>
+    </fieldset>
+    <fieldset><legend>Report settings</legend>
+      <div class="row">
+        <div><label for="gap">Silence threshold (minutes)</label><input type="number" id="gap" value="${esc(o.gap_minutes != null ? o.gap_minutes : 5)}" min="0"></div>
+        <div><label for="tw">Warning patterns shown</label><input type="number" id="tw" value="${esc(o.top_warnings != null ? o.top_warnings : 30)}" min="0"></div>
+        <div><label for="te">Error groups shown in full</label><input type="number" id="te" value="${esc(o.top_errors != null ? o.top_errors : 50)}" min="0"></div>
+        <div><label for="ts">Silences listed</label><input type="number" id="ts" value="${esc(o.top_silences != null ? o.top_silences : 20)}" min="0"></div>
+      </div>
+    </fieldset>`;
+}
+function readOptions() {
+  return { redact: $("#redact").checked, redact_terms: $("#terms").value, gap_minutes: +$("#gap").value || 5,
+           top_warnings: +$("#tw").value, top_errors: +$("#te").value, top_silences: +$("#ts").value };
+}
+
 /* ---------------------------------------------------------------- add a run */
 function showAdd() {
   S.current = null; document.querySelectorAll("nav.runs li button").forEach(b => b.setAttribute("aria-current", "false"));
@@ -159,20 +182,9 @@ function showAdd() {
     <input type="text" id="folder" placeholder="C:\\CAST\\logs\\MyApp_2026-09-26 or /data/cast/logs/run">
     <label for="name">Name of the run (optional)</label>
     <input type="text" id="name" placeholder="Taken from the archive or folder name">
-    <fieldset><legend>Privacy</legend>
-      <div class="check"><input type="checkbox" id="redact"><label for="redact" style="margin:0">Mask hosts, IP addresses, user names and customer paths</label></div>
-      <label for="terms">Names to mask, separated by commas (customer, project, company)</label>
-      <input type="text" id="terms" placeholder="acme, projectX">
-      <p class="note">Credentials are always masked. Masking is needed before sharing a report outside the company.</p>
-    </fieldset>
-    <fieldset><legend>Report settings</legend>
-      <div class="row">
-        <div><label for="gap">Silence threshold (minutes)</label><input type="number" id="gap" value="5" min="0"></div>
-        <div><label for="tw">Warning patterns shown</label><input type="number" id="tw" value="30" min="0"></div>
-        <div><label for="te">Error groups shown in full</label><input type="number" id="te" value="50" min="0"></div>
-        <div><label for="ts">Silences listed</label><input type="number" id="ts" value="20" min="0"></div>
-      </div>
-      <label for="trig">Explanations from an earlier analysis (triggers.json, optional)</label>
+    ${optionsHTML({})}
+    <fieldset><legend>Earlier explanations</legend>
+      <label for="trig">Explanations from an earlier analysis of this application (triggers.json, optional)</label>
       <input type="file" id="trig" accept=".json">
     </fieldset>
     <div class="actions"><button class="btn" id="go" disabled>Analyse</button><span class="note" id="chosen">No archive or folder chosen yet.</span></div>
@@ -221,9 +233,7 @@ async function startAnalysis(file) {
       let obj; try { obj = JSON.parse(await tf.text()); } catch (e) { throw new Error("The explanations file is not valid JSON: " + e.message); }
       await api(`/api/runs/${encodeURIComponent(up.run.id)}/import-triggers`, { method: "POST", json: obj });
     }
-    await api(`/api/runs/${encodeURIComponent(up.run.id)}/analyse`, { method: "POST", json: {
-      redact: $("#redact").checked, redact_terms: $("#terms").value, gap_minutes: +$("#gap").value || 5,
-      top_warnings: +$("#tw").value, top_errors: +$("#te").value, top_silences: +$("#ts").value } });
+    await api(`/api/runs/${encodeURIComponent(up.run.id)}/analyse`, { method: "POST", json: readOptions() });
     S.current = up.run.id; await loadRuns(up.run.id);
   } catch (e) { say(e.message, true); go.disabled = false; }
 }
@@ -255,9 +265,26 @@ function renderRun() {
   const tabs = [["overview", "Overview"], ["errors", "Errors"], ["warnings", "Warnings"], ["explain", "Explanations"], ["compare", "Compare runs"], ["export", "Export"]];
   $("#main").innerHTML = `<h2>${esc(m.name)}</h2>
     <p class="lead">${esc(m.input)}${m.options && (m.options.redact || (m.options.redact_terms || []).length) ? " · reports masked" : ""}</p>
+    <div class="actions" style="margin-top:0"><button class="btn secondary" id="again" aria-expanded="false">Analyse again</button></div>
+    <div id="againPanel"></div>
     <div class="tabs" role="tablist">${tabs.map(([k, l]) => `<button role="tab" aria-selected="${S.tab === k}" data-tab="${k}">${l}</button>`).join("")}</div>
     <div id="tab"></div>`;
   document.querySelectorAll(".tabs button").forEach(b => b.onclick = () => { S.tab = b.dataset.tab; renderRun(); });
+  $("#again").onclick = () => {
+    const p = $("#againPanel"), open = $("#again").getAttribute("aria-expanded") === "true";
+    $("#again").setAttribute("aria-expanded", String(!open));
+    if (open) { p.innerHTML = ""; return; }
+    p.innerHTML = `<div class="panel" style="margin-top:12px">${optionsHTML(m.options)}
+      <p class="note">The logs already unpacked are reused, and the explanations already written are kept.</p>
+      <div class="actions"><button class="btn" id="againGo">Analyse</button><button class="btn secondary" id="againCancel">Cancel</button><span class="note" id="againMsg"></span></div></div>`;
+    $("#againCancel").onclick = () => $("#again").click();
+    $("#againGo").onclick = async () => {
+      $("#againGo").disabled = true;
+      try { await api(`/api/runs/${encodeURIComponent(S.current)}/analyse`, { method: "POST", json: readOptions() });
+        await loadRuns(); openRun(S.current); }
+      catch (e) { $("#againMsg").textContent = e.message; $("#againGo").disabled = false; }
+    };
+  };
   ({ overview: tabOverview, errors: tabErrors, warnings: tabWarnings, explain: tabExplain, compare: tabCompare, export: tabExport })[S.tab]();
 }
 
@@ -437,12 +464,13 @@ function tabExport() {
     <h3 style="margin-top:0">For your own use</h3><p class="note">All reports and the working explanations file (triggers.json). Keep triggers.json: give it to the next analysis of this application and your explanations carry over.</p>
     <div class="actions"><a class="btn" href="/api/runs/${id}/export">Download all reports</a></div>
     <h3>To share outside the company</h3>
-    <p class="note">${red ? "The masked reports and triggers.shared.json, never the internal triggers.json." : "This run was analysed without masking. Add it again with masking on to produce a pack you can share."}</p>
+    <p class="note">${red ? "The masked reports and triggers.shared.json, never the internal triggers.json." : "This run was analysed without masking. Use “Analyse again” at the top, with masking on, to produce a pack you can share."}</p>
     <div class="actions"><a class="btn ${red ? "" : "secondary"}" ${red ? `href="/api/runs/${id}/export?shared=1"` : 'aria-disabled="true" style="pointer-events:none;opacity:.5"'}>Download the share pack</a></div>
     <h3>Single files</h3><ul>${files.map(f => `<li><a href="/api/runs/${id}/file/${f}">${esc(f)}</a></li>`).join("")}</ul>
     <h3>Remove</h3><div class="actions"><button class="btn secondary" id="del">Delete this run from the workspace</button></div></div>`;
   $("#del").onclick = async () => { if (!confirm("Delete this run and its reports from the workspace? The original logs are not touched.")) return;
-    await api(`/api/runs/${id}`, { method: "DELETE" }); S.current = null; S.results = null; loadRuns(); };
+    try { await api(`/api/runs/${id}`, { method: "DELETE" }); S.current = null; S.results = null; loadRuns(); }
+    catch (e) { alert(e.message); } };
 }
 
 $("#addRun").onclick = showAdd;

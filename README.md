@@ -20,11 +20,12 @@ Options:
 - `--workspace DIR`: where runs and reports are kept (default: `./workspace`).
 - `--skills-dir DIR`: use other copies of the skills. This is the folder that contains `analyze-logs/` and `analyze-tracebacks/`; by default, the copies in `./skills` are used.
 - `--max-upload-gb 4`: the largest archive accepted.
+- `--max-extract-gb 20`: the largest total size an archive may unpack to, nested zips included. This guards against archives that expand to fill the disk.
 - `--no-browser`: don't open the browser.
 
 ## Using it
 
-1. **Add a run.** Drop a zip, or give a folder path. Archives with one zip per phase (CAST 8.3 / AIP Console exports) are unpacked phase by phase, so identically named files don't overwrite each other. To keep your earlier explanations, give the `triggers.json` from a previous analysis of the same application.
+1. **Add a run.** Drop a zip, or give a folder path (quotes from Windows' "Copy as path" are fine). Archives with one zip per phase (CAST 8.3 / AIP Console exports) are unpacked phase by phase, so identically named files don't overwrite each other. To keep your earlier explanations, give the `triggers.json` from a previous analysis of the same application.
 2. **Overview.** The run status comes first: Completed, Failed or Did not finish. Then the timeline, the phases, the environment and the extensions.
    - **The timeline** shows each log as a bar. Hatched parts are silences; hover over one to see the last line before it. A silence after a source file starts is processing; after an external command or plugin starts, it is a wait.
 3. **Errors.** The Python tracebacks, grouped, each with its first traceback and its explanation.
@@ -34,6 +35,7 @@ Options:
 7. **Export.**
    - **All reports:** for your own use. It includes the working `triggers.json`; keep it for the next analysis.
    - **Share pack:** only for runs analysed with masking. It contains the masked reports and `triggers.shared.json`, never the internal `triggers.json`.
+8. **Analyse again.** On any run, re-run the analysis with other options (masking, thresholds) without uploading the logs again. The explanations already written are kept.
 
 ## Privacy and security
 

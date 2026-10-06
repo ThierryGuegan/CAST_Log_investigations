@@ -186,6 +186,70 @@ class Workflow(unittest.TestCase):
         self.assertEqual(req("GET", "/api/runs/{}".format(rid))[0], 404)
 
 
+class AuditFixes(unittest.TestCase):
+    def test_decompression_bomb_is_refused_before_extraction(self):
+        bomb = zip_bytes({"0-analyze.log": "2026-10-01 20:00:00 x\n", "big.log": b"\0" * (20 * 1024 * 1024)})
+        target = Path(TMP) / "bomb"
+        with self.assertRaises(server.ExtractLimit):
+            fd = Path(TMP) / "bomb.zip"; fd.write_bytes(bomb)
+            server.extract_archive(fd, target, max_bytes=5 * 1024 * 1024)
+        self.assertFalse((target / "big.log").exists())                        # nothing written
+        nested = zip_bytes({"phase_logs.zip": bomb})                              # nested zips count too
+        fd = Path(TMP) / "nested.zip"; fd.write_bytes(nested)
+        with self.assertRaises(server.ExtractLimit):
+            server.extract_archive(fd, Path(TMP) / "nested", max_bytes=5 * 1024 * 1024)
+        old, SRV.max_extract = SRV.max_extract, 5 * 1024 * 1024                 # and through the server
+        try:
+            code, body = upload(bomb)
+            self.assertEqual(code, 400)
+            self.assertIn("extraction limit", body["error"])
+        finally:
+            SRV.max_extract = old
+
+    def test_no_deletion_while_running_and_no_resurrection(self):
+        folder = Path(TMP) / "slow"
+        folder.mkdir(exist_ok=True)
+        (folder / "0-analyze.log").write_text("".join("2026-10-01 20:%02d:00 [WARNING] w %d\n" % (i % 60, i) for i in range(150000)))
+        code, body = req("POST", "/api/folder", {"path": str(folder)})
+        rid = body["run"]["id"]
+        req("POST", "/api/runs/{}/analyse".format(rid), {})
+        code, body = req("DELETE", "/api/runs/{}".format(rid))
+        self.assertEqual(code, 409)
+        self.assertIn("being analysed", body["error"])
+        for _ in range(300):
+            if req("GET", "/api/runs/{}".format(rid))[1]["job"]["state"] != "running":
+                break
+            time.sleep(0.1)
+        self.assertEqual(req("DELETE", "/api/runs/{}".format(rid))[0], 200)
+        time.sleep(0.5)
+        self.assertEqual(req("GET", "/api/runs/{}".format(rid))[0], 404)
+        self.assertNotIn(rid, [r["id"] for r in req("GET", "/api/runs")[1]])
+
+    def test_analyse_again_with_masking_keeps_explanations(self):
+        _, body = upload(phase_zip_archive(), run_name="again")
+        rid = body["run"]["id"]
+        analyse(rid)
+        _, res = req("GET", "/api/runs/{}/results".format(rid))
+        sig = res["tracebacks"]["groups"][0]["signature_id"]
+        req("PUT", "/api/runs/{}/triggers".format(rid), {sig: "Written before masking."})
+        self.assertEqual(req("GET", "/api/runs/{}/export?shared=1".format(rid))[0], 409)
+        analyse(rid, redact=True, redact_terms="acme")                              # no new upload
+        code, data = req("GET", "/api/runs/{}/export?shared=1".format(rid), raw=True)
+        self.assertEqual(code, 200)
+        _, res = req("GET", "/api/runs/{}/results".format(rid))
+        self.assertEqual(res["triggers"][sig]["trigger"], "Written before masking.")
+        analyse(rid)                                                                 # unmasked again:
+        out = Path(res["meta"]["input"]).parent / "Output"
+        self.assertFalse((out / "triggers.shared.json").exists())                  # no stale masked copy
+
+    def test_quoted_windows_path(self):
+        folder = Path(TMP) / "quoted logs"
+        folder.mkdir(exist_ok=True)
+        (folder / "0-analyze.log").write_text(ANALYZE)
+        code, body = req("POST", "/api/folder", {"path": '"{}"'.format(folder)})
+        self.assertEqual(code, 200, body)
+
+
 class Security(unittest.TestCase):
     def test_writes_need_the_gui_header(self):
         r = urllib.request.Request(BASE + "/api/upload", data=b"x", method="POST")

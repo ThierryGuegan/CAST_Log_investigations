@@ -954,7 +954,7 @@ def main():
 
     out_dir.mkdir(parents=True, exist_ok=True)
     # redact the data first: quoted lines are cut at the report width while building, and a
-    # cut-off host ("castlin02") would no longer be recognised by a pass over the final text
+    # cut-off host ("dbsrv01") would no longer be recognised by a pass over the final text
     if args.redact or args.redact_term:
         report = map_strings(report, lambda t: apply_redaction(t, args), skip_keys=("input_dir",))
     text = build_report(report)

@@ -57,7 +57,7 @@ ENV_LOG = """2026-06-24 13:05:09.123 [INFO] Run analysis
 2026-06-24 13:05:09 [INFO] CAIP Version: CAST 8.4.10 (Build 2088)
 2026-06-24 13:05:09 [INFO] LISA Folder: /usr/share/CAST/CASTMS/LISA/
 2026-06-24 13:05:09 [INFO] LTSA Folder: /usr/share/CAST/CASTMS/LTSA/
-2026-06-24 13:05:09 [INFO] Connection string: LIBPQ:10.17.25.159:2285,bidc001;user=cast;password=S3cret!
+2026-06-24 13:05:09 [INFO] Connection string: LIBPQ:192.0.2.10:2285,castdb;user=cast;password=S3cret!
 2026-06-24 13:21:44 [INFO] End
 
 """
@@ -172,7 +172,7 @@ class Redaction(unittest.TestCase):
                          "and /usr/share/CAST/CASTMS/LISA/x.txt host db01.acme.internal "
                          "package Foo version 1.0.0.0\n2026-06-24 13:40:00 [INFO] ACME done\n")
         _, report = run({"1-run.log": log}, "--redact", "--redact-term", "ACME")
-        self.assertNotIn("10.17.25.159", report)
+        self.assertNotIn("192.0.2.10", report)
         self.assertNotIn("db01.acme.internal", report)
         self.assertNotIn("ACME", report)
         self.assertIn("/usr/share/CAST/CASTMS/LISA/", report)       # CAST paths are kept
@@ -200,11 +200,11 @@ class Round3(unittest.TestCase):
         self.assertNotIn(str(tmp), head)                       # no machine-specific path
 
     def test_space_separated_credentials_in_quoted_lines(self):
-        log = ("2026-10-01 17:27:02 [INFO] Running DMT command [java -jar dmt.jar --password baps -user cast]\n"
+        log = ("2026-10-01 17:27:02 [INFO] Running DMT command [java -jar dmt.jar --password tiger7 -user cast]\n"
                "2026-10-01 20:52:46 [INFO] done\n")
         _, report = run({"p.log": log})
         self.assertIn("DMT command", report)                   # the line IS quoted (gap edge)
-        self.assertNotIn("baps", report)
+        self.assertNotIn("tiger7", report)
 
 
 class Round4(unittest.TestCase):
@@ -264,14 +264,14 @@ class Round5(unittest.TestCase):
         self.assertLess(time.perf_counter() - t, 20)
 
     def test_mask_mode(self):
-        line = '2026-10-01 20:53:00 [INFO] connectPassword="CRYPTED:CAA9FB4" host db01.suez-eau.fr\n'
+        line = '2026-10-01 20:53:00 [INFO] connectPassword="CRYPTED:CAA9FB4" host db01.example-corp.fr\n'
         r = subprocess.run([sys.executable, str(SCRIPT), "--mask"], input=line, capture_output=True, text=True)
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertNotIn("CAA9FB4", r.stdout)
-        self.assertIn("db01.suez-eau.fr", r.stdout)
+        self.assertIn("db01.example-corp.fr", r.stdout)
         r = subprocess.run([sys.executable, str(SCRIPT), "--mask", "--redact"], input=line,
                            capture_output=True, text=True)
-        self.assertNotIn("suez-eau", r.stdout)
+        self.assertNotIn("example-corp", r.stdout)
 
 
 def markdown_problems(md):
@@ -490,9 +490,9 @@ class Cast83Formats(unittest.TestCase):
         self.assertEqual(data["extensions"], {"com.castsoftware.php": "3.1.2-funcrel", "com.castsoftware.sqlanalyzer": "unknown"})
 
     def test_redaction_happens_before_truncation(self):
-        line = "INF: 2026-09-26 01:00:00: " + "x" * 85 + " connect castlin02.lan.itr.acme:5432\r\n"
+        line = "INF: 2026-09-26 01:00:00: " + "x" * 85 + " connect dbsrv01.lan.corp.acme:5432\r\n"
         _, report = run({"a.log": line + "INF: 2026-09-26 02:00:00: next\r\n"}, "--redact")
-        self.assertNotIn("castlin02", report)
+        self.assertNotIn("dbsrv01", report)
 
 
 # >>> shared-redaction tests: keep identical in both skills' tests/run_tests.py
@@ -500,12 +500,12 @@ import hashlib as _hashlib
 import importlib.util as _ilu
 
 SHARED_BLOCK_SHA = "7568b60f3fc4204d"   # update in BOTH skills when the shared block changes
-REDACTION_SAMPLE = (r"-password Hunter2 --password baps --pwd=x1 Authorization: Bearer eyJabc.def "
-                    r"password=S3c; Unexpected token: '}' api_key=K9 host db01.suez-eau.fr "
-                    r"unc \\fileserver01\share\ACME\App.cs Connection string: LIBPQ:pgprod-bidc01:5432,castdb "
+REDACTION_SAMPLE = (r"-password Hunter2 --password tiger7 --pwd=x1 Authorization: Bearer eyJabc.def "
+                    r"password=S3c; Unexpected token: '}' api_key=K9 host db01.example-corp.fr "
+                    r"unc \\fileserver01\share\ACME\App.cs Connection string: LIBPQ:pgprod-db01:5432,castdb "
                     r"Server=sql01;Database=x jdbc:postgresql://dbhost:5432/cast https://doc.castsoftware.com/x "
                     r"System.IO version 1.0.0.0 at 10.1.2.3 /usr/share/CAST/Extensions/x.py "
-                    r"/opt/cast/upload/BAPS/A.cs C:\Users\jdoe\src\B.cs "
+                    r"/opt/cast/upload/APP1/A.cs C:\Users\jdoe\src\B.cs "
                     # round 4: quoted / JSON / XML / env-style / camelCase / YAML / CAST-encrypted
                     r"password=\"my secret\" '\"password\": \"jsonpw\"' <password>xmlpw</password> "
                     r"DB_PASSWORD=envpw PGPASSWORD=pgpw CAST_TOKEN=tok7 secret_key: yamlpw "
@@ -514,8 +514,8 @@ REDACTION_SAMPLE = (r"-password Hunter2 --password baps --pwd=x1 Authorization: 
                     r"[mscorlib]System.Security.Cryptography.PasswordDeriveBytes.+ctor(x) "
                     r"System.IdentityModel.Tokens.Jwt.JwtPayload Token(Token.Generic,'Uri',1,2) "
                     r"closing dn-sendcredentials Culture=neutral, PublicKeyToken=b77a5c561934e089")
-MUST_GO = ["Hunter2", "baps", "x1", "eyJabc", "S3c", "K9", "suez-eau", "fileserver01", "ACME",
-           "pgprod-bidc01", "sql01", "dbhost", "10.1.2.3", "/opt/cast", "jdoe",
+MUST_GO = ["Hunter2", "tiger7", "x1", "eyJabc", "S3c", "K9", "example-corp", "fileserver01", "ACME",
+           "pgprod-db01", "sql01", "dbhost", "10.1.2.3", "/opt/cast", "jdoe",
            "my secret", "jsonpw", "xmlpw", "envpw", "pgpw", "tok7", "yamlpw", "CAA9FB4", ";cd",
            "castadm", "sqluser"]
 MUST_STAY = ["Unexpected token: '}'", "doc.castsoftware.com", "System.IO", "version 1.0.0.0",
@@ -547,10 +547,10 @@ class SharedRedaction(unittest.TestCase):
         for s in MUST_STAY:
             self.assertIn(s, out)
         secrets_only = m.mask_secrets(REDACTION_SAMPLE)          # without --redact
-        for s in ["Hunter2", "baps", "eyJabc", "S3c", "K9", "my secret", "jsonpw", "xmlpw", "envpw",
+        for s in ["Hunter2", "tiger7", "eyJabc", "S3c", "K9", "my secret", "jsonpw", "xmlpw", "envpw",
                   "pgpw", "tok7", "yamlpw", "CAA9FB4", ";cd"]:
             self.assertNotIn(s, secrets_only)
-        self.assertIn("suez-eau.fr", secrets_only)               # hosts only masked with --redact
+        self.assertIn("example-corp.fr", secrets_only)               # hosts only masked with --redact
         self.assertIn("castadm", secrets_only)                   # user names only with --redact
 
     def test_terms_never_mangle_placeholders(self):
@@ -624,10 +624,10 @@ class SharedRedaction(unittest.TestCase):
 
     def test_private_hosts_with_ports(self):
         m = _load_script()
-        cases = {"acme_mngt on CastStorageService _ dbsrv02.lan.itr.acme:5432": "acme_mngt on CastStorageService _ <host>:5432",
-                 "-CONNECT_LOCAL('PostgreSQL','//dbsrv02.lan.itr.acme:5432/postgres')": "-CONNECT_LOCAL('PostgreSQL','//<host>:5432/postgres')",
-                 "jdbc:postgresql://dbsrv02.lan.itr.acme:5432/db": "jdbc:postgresql://<host>:5432/db",
-                 "connect to dbsrv02.lan.itr.acme:5432 failed": "connect to <host>:5432 failed"}
+        cases = {"acme_mngt on CastStorageService _ dbsrv02.lan.corp.acme:5432": "acme_mngt on CastStorageService _ <host>:5432",
+                 "-CONNECT_LOCAL('PostgreSQL','//dbsrv02.lan.corp.acme:5432/postgres')": "-CONNECT_LOCAL('PostgreSQL','//<host>:5432/postgres')",
+                 "jdbc:postgresql://dbsrv02.lan.corp.acme:5432/db": "jdbc:postgresql://<host>:5432/db",
+                 "connect to dbsrv02.lan.corp.acme:5432 failed": "connect to <host>:5432 failed"}
         for src, want in cases.items():
             self.assertEqual(m.redact_text(src, [], True), want)
         for keep in ("analyser.py:492", "formsreport_symbols/__init__.py:1713", "com.acme.billing.Foo:12"):

@@ -482,7 +482,7 @@ def warning_template(msg):
     t = re.sub(r"'[\w$.#<>\[\]]*\([^()'\n]{0,200}\)[\w$.#<>\[\]]*'", lambda m: keep(m, "'…'"), t)
     t = re.sub(r"'([^'\s]{1,120})'", lambda m: keep(m, "'…'"), t)      # single quotes: one word
     t = re.sub(r"(?:[A-Za-z]:\\|/)[^\s,;]+", "<path>", t)
-    t = re.sub(r"\b[A-Za-z_]\w*(?=\(\))", lambda m: keep_name(m.group(0)), t)   # getAbpCode()
+    t = re.sub(r"\b[A-Za-z_]\w*(?=\(\))", lambda m: keep_name(m.group(0)), t)   # getOrderCode()
     # unquoted names after a naming keyword. After package / assembly / library / extraction any
     # word is a name (lowercase NuGet ids such as xunit included); after type, class, method...
     # only identifier-like words (capitals, digits, . _ -), so "type variable" or "method
