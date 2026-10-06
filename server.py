@@ -451,7 +451,7 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if parts == ["api", "upload"]:
                 return self._upload()
-            if parts == ["api", "folder"]:
+            if parts == ["api", "folder"] or parts == ["api", "folder", "check"]:
                 body = self._json_body()
                 # Windows "Copy as path" wraps the path in double quotes
                 folder = Path(str(body.get("path", "")).strip().strip('"').strip("'").strip()).expanduser()
@@ -460,8 +460,10 @@ class Handler(BaseHTTPRequestHandler):
                 logs = [p for p in folder.rglob("*.log") if p.is_file()]
                 if not logs:
                     return self._error(400, "That folder contains no .log file.")
-                meta = ws.new_run(body.get("name") or folder.name, input_path=folder)
                 runs = [str(p.relative_to(folder)) for p in logs if p.name == "0-analyze.log"]
+                if parts[-1] == "check":            # preview for the Add a run screen: creates nothing
+                    return self._send(200, {"logs": len(logs), "runs_found": runs, "name": folder.name})
+                meta = ws.new_run(body.get("name") or folder.name, input_path=folder)
                 return self._send(200, {"run": meta, "logs": len(logs), "runs_found": runs})
             if parts == ["api", "runs", "clean"]:
                 body = self._json_body()

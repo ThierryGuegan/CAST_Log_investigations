@@ -184,6 +184,12 @@ const PREFS = "cast-gui-privacy";
 function loadPrefs() { try { return JSON.parse(localStorage.getItem(PREFS)) || {}; } catch (e) { return {}; } }
 function savePrefs() { try { localStorage.setItem(PREFS, JSON.stringify({ redact: $("#redact").checked, redact_terms: $("#terms").value.split(",").map(t => t.trim()).filter(Boolean) })); } catch (e) {} }
 
+const FOLDERS = "cast-gui-folders";
+function recentFolders() { try { return JSON.parse(localStorage.getItem(FOLDERS)) || []; } catch (e) { return []; } }
+function rememberFolder(f) { try { localStorage.setItem(FOLDERS, JSON.stringify([f].concat(recentFolders().filter(x => x !== f)).slice(0, 8))); } catch (e) {} }
+const cleanPath = v => v.trim().replace(/^["']+|["']+$/g, "").trim();     // "Copy as path" adds quotes
+let UPLOAD = null;                                                         // the upload in progress, to cancel it
+
 function showAdd() {
   S.current = null; document.querySelectorAll("nav.runs li button").forEach(b => b.setAttribute("aria-current", "false"));
   const pf = loadPrefs();
@@ -193,7 +199,9 @@ function showAdd() {
   <div class="panel">
     <div class="drop" id="drop" tabindex="0" role="button" aria-label="Choose a zip archive">Drop a .zip here, or click to choose one<input type="file" id="file" accept=".zip" hidden></div>
     <label for="folder">Or a folder on this computer</label>
-    <input type="text" id="folder" placeholder="C:\\CAST\\logs\\MyApp_2026-09-26 or /data/cast/logs/run" autocomplete="off" spellcheck="false">
+    <input type="text" id="folder" list="recentFolders" placeholder="C:\\CAST\\logs\\MyApp_2026-09-26 or /data/cast/logs/run" autocomplete="off" spellcheck="false">
+    <datalist id="recentFolders">${recentFolders().map(f => `<option value="${esc(f)}"></option>`).join("")}</datalist>
+    <p class="note" id="fcheck" aria-live="polite"></p>
     <label for="name">Name of the run (optional)</label>
     <input type="text" id="name" placeholder="Taken from the archive or folder name">
     ${optionsHTML({ redact: pf.redact, redact_terms: pf.redact_terms }, true)}
@@ -201,8 +209,9 @@ function showAdd() {
     <details class="adv"><summary>Earlier explanations (optional)</summary><fieldset><legend>Earlier explanations</legend>
       <label for="trig">Explanations from an earlier analysis of this application (triggers.json)</label>
       <input type="file" id="trig" accept=".json">
+      <p class="note" id="tcheck" aria-live="polite"></p>
     </fieldset></details>
-    <div class="actions"><button class="btn" id="go" disabled>Analyse</button><span class="note" id="chosen" aria-live="polite">No archive or folder chosen yet.</span></div>
+    <div class="actions"><button class="btn" id="go" disabled>Analyse</button><button class="btn secondary" id="cancel" hidden>Cancel upload</button><span class="note" id="chosen" aria-live="polite">No archive or folder chosen yet.</span></div>
     <div class="progress" hidden id="prog"><div></div></div>
     <div id="addMsg" aria-live="polite"></div>
   </div>`;
@@ -210,10 +219,11 @@ function showAdd() {
   const drop = $("#drop"), input = $("#file"), go = $("#go"), chosen = $("#chosen"), folder = $("#folder");
   const hint = (t, err) => { $("#addMsg").innerHTML = t ? `<div class="msg ${err ? "err" : ""}">${esc(t)}</div>` : ""; };
   const refresh = () => {
-    go.disabled = !(file || folder.value.trim());
+    go.disabled = !(file || (cleanPath(folder.value) && folderOk));
     drop.classList.toggle("chosen", !!file);
     drop.firstChild.textContent = file ? `${file.name} (${(file.size / 1e6).toFixed(1)} MB). Click to choose another.` : "Drop a .zip here, or click to choose one";
-    chosen.textContent = file ? "Archive chosen." : folder.value.trim() ? "Folder: " + folder.value.trim() : "No archive or folder chosen yet.";
+    chosen.textContent = file ? "Archive chosen." : cleanPath(folder.value) ? "Folder chosen." : "No archive or folder chosen yet.";
+    $("#name").placeholder = file ? `Default: ${file.name.replace(/\.zip$/i, "")}` : folderName ? `Default: ${folderName}` : "Taken from the archive or folder name";
   };
   const take = f => {                          // one source at a time: an archive or a folder
     hint("");
@@ -221,7 +231,23 @@ function showAdd() {
       hint(f.type === "" && f.size % 4096 === 0 ? "That looks like a folder. Browsers cannot read a dropped folder's path: type or paste its path in the folder box below." : "Only .zip archives can be added here. For loose .log files, give the path of their folder.", true);
       f = null;
     }
-    file = f; if (file) folder.value = ""; refresh();
+    file = f; if (file) { folder.value = ""; fcheck(); } refresh();
+  };
+  // live check of the folder: how many logs and runs it holds, before anything is created
+  let timer = null, folderOk = true, folderName = "";
+  const fnote = (t, err) => { const n = $("#fcheck"); n.textContent = t; n.style.color = err ? "var(--bad)" : ""; };
+  const fcheck = () => {
+    clearTimeout(timer); const v = cleanPath(folder.value);
+    folderOk = true; folderName = ""; fnote(""); if (!v) { refresh(); return; }
+    timer = setTimeout(async () => {
+      try {
+        const r = await api("/api/folder/check", { method: "POST", json: { path: v } });
+        if (cleanPath(folder.value) !== v) return;                      // typed on since
+        fnote(`${r.logs.toLocaleString("en")} log file${r.logs > 1 ? "s" : ""} found${r.runs_found.length ? `, ${r.runs_found.length} run${r.runs_found.length > 1 ? "s" : ""} (${r.runs_found.slice(0, 3).join(", ")}${r.runs_found.length > 3 ? ", …" : ""})` : ""}.`);
+        folderOk = true; folderName = r.name;
+      } catch (e) { if (cleanPath(folder.value) !== v) return; folderOk = false; fnote(e.message, true); }
+      refresh();
+    }, 400);
   };
   drop.onclick = () => input.click();
   drop.onkeydown = e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); input.click(); } };
@@ -230,11 +256,38 @@ function showAdd() {
   drop.ondragleave = () => drop.classList.remove("over");
   drop.ondrop = e => { e.preventDefault(); drop.classList.remove("over"); const fl = e.dataTransfer.files;
     take(fl[0] || null); if (fl.length > 1) hint("Several files dropped: only the first one is used. Put the logs of one run in a single zip.", true); };
-  folder.oninput = () => { if (folder.value.trim() && file) { file = null; input.value = ""; } hint(""); refresh(); };
+  folder.oninput = () => { if (folder.value.trim() && file) { file = null; input.value = ""; } hint(""); fcheck(); refresh(); };
+  folder.onchange = () => { const c = cleanPath(folder.value); if (c !== folder.value) { folder.value = c; fcheck(); } };
+  $("#trig").onchange = async () => {                // check the explanations file as soon as it is chosen
+    const f = $("#trig").files[0], n = $("#tcheck"); n.textContent = ""; n.style.color = "";
+    if (!f) return;
+    try { const o = JSON.parse(await f.text()); if (!o || typeof o !== "object" || Array.isArray(o)) throw new Error("expected a JSON object");
+      const k = Object.values(o).filter(v => v && typeof v === "object" && v.trigger).length;
+      n.textContent = `${k} explanation${k === 1 ? "" : "s"} will be reused.`; }
+    catch (e) { $("#trig").value = ""; n.style.color = "var(--bad)"; n.textContent = "Not a valid triggers.json file (" + e.message + "). It was ignored."; }
+  };
+  $("#cancel").onclick = () => { if (UPLOAD) UPLOAD.abort(); };
   const enter = e => { if (e.key === "Enter" && !go.disabled) go.click(); };
   folder.onkeydown = enter; $("#name").onkeydown = enter;
   $("#redact").onchange = savePrefs; $("#terms").onchange = savePrefs;
   go.onclick = () => startAnalysis(file);
+}
+
+function uploadZip(file, name) {
+  return new Promise((resolve, reject) => {
+    const x = new XMLHttpRequest(); const bar = $("#prog"); bar.hidden = false; UPLOAD = x; $("#cancel").hidden = false;
+    x.open("POST", "/api/upload"); x.setRequestHeader("X-CAST-GUI", "1");
+    x.setRequestHeader("X-Filename", encodeURIComponent(file.name).replace(/%/g, "_"));
+    if (name) x.setRequestHeader("X-Run-Name", name.replace(/[^\x20-\x7E]/g, "_"));
+    x.upload.onprogress = e => { if (!e.lengthComputable) return; const pct = Math.round(100 * e.loaded / e.total);
+      $("div", bar).style.width = pct + "%";
+      const m = $("#addMsg .msg"); if (m) m.textContent = pct < 100 ? `Uploading… ${pct}% (${(e.loaded / 1e6).toFixed(0)} of ${(e.total / 1e6).toFixed(0)} MB)` : "Unpacking the archive…"; };
+    x.onabort = () => { UPLOAD = null; bar.hidden = true; $("#cancel").hidden = true; reject(new Error("Upload cancelled.")); };
+    x.onload = () => { UPLOAD = null; $("#cancel").hidden = true; let b = {}; try { b = JSON.parse(x.responseText); } catch (e) {}
+      x.status === 200 ? resolve(b) : reject(new Error(b.error || "Upload failed (" + x.status + ")")); };
+    x.onerror = () => { UPLOAD = null; $("#cancel").hidden = true; reject(new Error("Upload failed: the server did not answer.")); };
+    x.send(file);
+  });
 }
 
 async function startAnalysis(file) {
@@ -244,7 +297,8 @@ async function startAnalysis(file) {
     const name = $("#name").value.trim();
     savePrefs();
     say(file ? "Uploading…" : "Checking the folder…");
-    const up = file ? await uploadZip(file, name) : await api("/api/folder", { method: "POST", json: { path: $("#folder").value.trim(), name } });
+    const up = file ? await uploadZip(file, name) : await api("/api/folder", { method: "POST", json: { path: cleanPath($("#folder").value), name } });
+    if (!file) rememberFolder(cleanPath($("#folder").value));
     if (up.runs_found && up.runs_found.length > 1)
       say(`Note: ${up.runs_found.length} runs found in this input (${up.runs_found.join(", ")}); their figures will be combined.`);
     const tf = $("#trig").files[0];
@@ -254,7 +308,7 @@ async function startAnalysis(file) {
     }
     await api(`/api/runs/${encodeURIComponent(up.run.id)}/analyse`, { method: "POST", json: readOptions() });
     S.current = up.run.id; await loadRuns(up.run.id);
-  } catch (e) { say(e.message, true); go.disabled = false; }
+  } catch (e) { say(e.message, true); go.disabled = false; $("#cancel").hidden = true; }
 }
 
 /* ---------------------------------------------------------------- run view */
