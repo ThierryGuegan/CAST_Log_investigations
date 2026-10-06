@@ -6,7 +6,7 @@ The interface itself analyses nothing. It runs the two skill scripts and display
 
 ## Start
 
-You need Python 3.7 or later; nothing else is installed.
+You need Python 3.8 or later; nothing else is installed.
 
 ```bash
 python3 server.py          # Linux / macOS

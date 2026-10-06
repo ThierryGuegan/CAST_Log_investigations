@@ -4,7 +4,7 @@
 The GUI never analyses anything itself: it runs the two skill scripts and displays the JSON
 they write, so every fix to the scripts reaches the GUI and their tests keep covering the logic.
 
-Standard library only, Python 3.7+. Listens on 127.0.0.1 only.
+Standard library only, Python 3.8+. Listens on 127.0.0.1 only.
 
 Usage:
   python3 server.py [--port 8765] [--workspace ./workspace] [--skills-dir DIR] [--no-browser]
@@ -55,6 +55,8 @@ def _check_members(zf, dest):
         target = (dest / m.filename).resolve()
         if target != dest and dest not in target.parents:
             raise ValueError("The archive contains a path outside its folder: {}".format(m.filename))
+        if (m.external_attr >> 16) & 0o170000 == 0o120000:      # Unix symlink entry
+            raise ValueError("The archive contains a symbolic link, which is not allowed: {}".format(m.filename))
 
 
 def phase_folder_name(zip_name):
