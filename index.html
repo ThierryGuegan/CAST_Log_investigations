@@ -262,7 +262,7 @@ function renderRun() {
     $("#main").innerHTML = `<h2>${esc(m.name)}</h2><div class="msg err">The analysis stopped with an error. The message from the script is below.</div>${st}`;
     return;
   }
-  const tabs = [["overview", "Overview"], ["errors", "Errors"], ["warnings", "Warnings"], ["explain", "Explanations"], ["compare", "Compare runs"], ["export", "Export"]];
+  const tabs = [["overview", "Overview"], ["errors", "Tracebacks"], ["explain", "Explanations"], ["warnings", "Warnings"], ["compare", "Compare runs"], ["export", "Export"]];
   $("#main").innerHTML = `<h2>${esc(m.name)}</h2>
     <p class="lead">${esc(m.input)}${m.options && (m.options.redact || (m.options.redact_terms || []).length) ? " · reports masked" : ""}</p>
     <div class="actions" style="margin-top:0"><button class="btn secondary" id="again" aria-expanded="false">Analyse again</button></div>
