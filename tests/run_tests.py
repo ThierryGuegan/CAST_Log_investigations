@@ -7,6 +7,7 @@ import atexit
 import io
 import os
 import json
+import re
 import shutil
 import sys
 import tempfile
@@ -352,6 +353,41 @@ class CleanRuns(unittest.TestCase):
         self.assertEqual(job["state"], "failed")
         self.assertEqual(job["steps"][-1]["step"], "Interrupted")
         SRV.ws.delete(rid)                                                        # now deletable without force
+
+
+class AddRunChecks(unittest.TestCase):
+    def test_folder_check_previews_without_creating_a_run(self):
+        folder = Path(TMP) / "check_folder"
+        folder.mkdir(exist_ok=True)
+        (folder / "0-analyze.log").write_text(ANALYZE)
+        (folder / "1-cast-ms-runanalysis-1.log").write_text(RUNANALYSIS)
+        before = len(req("GET", "/api/runs")[1])
+        code, body = req("POST", "/api/folder/check", {"path": '"{}"'.format(folder)})   # quotes from "Copy as path"
+        self.assertEqual(code, 200, body)
+        self.assertEqual((body["logs"], body["runs_found"], body["name"]), (2, ["0-analyze.log"], "check_folder"))
+        self.assertEqual(len(req("GET", "/api/runs")[1]), before)
+
+    def test_folder_check_errors_and_header(self):
+        empty = Path(TMP) / "check_empty"
+        empty.mkdir(exist_ok=True)
+        self.assertEqual(req("POST", "/api/folder/check", {"path": str(empty)})[0], 400)
+        self.assertEqual(req("POST", "/api/folder/check", {"path": str(Path(TMP) / "nope")})[0], 400)
+        r = urllib.request.Request(BASE + "/api/folder/check", data=b'{"path": "x"}', method="POST")
+        with self.assertRaises(urllib.error.HTTPError) as cm:
+            urllib.request.urlopen(r)
+        self.assertEqual(cm.exception.code, 403)
+
+
+class GuiPage(unittest.TestCase):
+    def test_every_function_the_page_calls_is_defined(self):
+        """A refactor once deleted uploadZip(), which silently broke every zip upload."""
+        with urllib.request.urlopen(BASE + "/") as resp:
+            page = resp.read().decode()
+        script = page.split("<script>")[1]
+        defined = set(re.findall(r"(?:async\s+)?function\s+([A-Za-z_$][\w$]*)", script))
+        defined |= set(re.findall(r"(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=", script))
+        called = set(re.findall(r"(?<![.\w])(upload\w*|start\w*|show\w*|tab\w*|load\w*|open\w*|render\w*|read\w*|remember\w*|clean\w*)\(", script))
+        self.assertEqual(sorted(c for c in called if c not in defined), [])
 
 
 class Security(unittest.TestCase):
