@@ -303,11 +303,17 @@ function tabOverview() {
   else if (s === "Did not finish") why = `No return value: the logs stop before the end of the run.${(st.last_tasks || []).length ? " Last tasks started: " + st.last_tasks.map(t => `<code>${esc(t)}</code>`).join(", then ") + "." : ""} Every figure below covers only what ran.`;
   else why = esc(st.detail || "");
   if (st.summary) why += ` CAST execution summary: <code>${esc(st.summary.status)}</code>.`;
+  // ERROR lines found in the logs, per log file (read from the warnings report; the run status itself only uses return values)
+  const errPer = {}; let errN = 0;
+  (T ? T.problems.groups : []).filter(g => g.level !== "WARNING").forEach(g => Object.entries(g.by_file || {}).forEach(([f, n]) => { errPer[f] = (errPer[f] || 0) + n; errN += n; }));
+  const errFiles = Object.entries(errPer).sort((a, b) => b[1] - a[1]);
+  const word = s === "Completed" && errN ? `Completed, with ${errN.toLocaleString("en")} error line${errN > 1 ? "s" : ""}` : s;
+  if (errN) why += ` Error lines are logged in ${errFiles.slice(0, 5).map(([f, n]) => `<code>${esc(f)}</code> (${n.toLocaleString("en")})`).join(", ")}${errFiles.length > 5 ? ` and ${errFiles.length - 5} more logs` : ""}. Details are in the Warnings tab (“Only errors and failure-like messages”).`;
   const tot = L.total, sil = L.silent_seconds_total || 0, totS = tot ? tot.hours * 3600 : 0;
   const tbs = T ? Object.values(T.per_file || {}).reduce((a, b) => a + b, 0) : null;
   const pt = T ? T.problems.totals : {};
   el.innerHTML = `
-    <div class="status ${statusClass(s)}"><span class="word">${esc(s)}</span><span class="why">${why}</span></div>
+    <div class="status ${statusClass(s)}"><span class="word">${esc(word)}</span><span class="why">${why}</span></div>
     <div class="figures">
       <div><b>${tot ? esc(tot.duration.replace(/^0d /, "")) : "—"}</b><span>from first to last log line</span></div>
       <div><b>${totS ? Math.round(100 * sil / totS) + "%" : "—"}</b><span>silent (no log output)</span></div>
