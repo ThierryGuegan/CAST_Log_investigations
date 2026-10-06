@@ -5,6 +5,7 @@ The server runs in this process on a free port and is driven over real HTTP.
 """
 import atexit
 import io
+import os
 import json
 import shutil
 import sys
@@ -15,6 +16,7 @@ import unittest
 import urllib.error
 import urllib.request
 import zipfile
+from datetime import datetime, timedelta
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent.parent
@@ -259,6 +261,97 @@ class AuditFixes(unittest.TestCase):
         (folder / "0-analyze.log").write_text(ANALYZE)
         code, body = req("POST", "/api/folder", {"path": '"{}"'.format(folder)})
         self.assertEqual(code, 200, body)
+
+
+class CleanRuns(unittest.TestCase):
+    """Cleaning old runs, and the Windows 'access denied' crash while saving meta.json."""
+
+    def make_run(self, name, days_old, state="done"):
+        ws = SRV.ws
+        meta = ws.new_run(name)
+        meta["created"] = (datetime.now() - timedelta(days=days_old)).isoformat(timespec="seconds")
+        meta["job"] = {"state": state}
+        ws.save_meta(meta["id"], meta)
+        (ws.root / meta["id"] / "Input").mkdir(exist_ok=True)
+        return meta["id"]
+
+    def test_clean_deletes_only_old_runs_that_are_not_running(self):
+        old, new = self.make_run("cl-old", 40), self.make_run("cl-new", 1)
+        busy = self.make_run("cl-busy", 90, state="running")
+        code, body = req("POST", "/api/runs/clean", {"older_than_days": 30, "dry_run": True})
+        self.assertEqual(code, 200, body)
+        self.assertEqual([m["id"] for m in body["matched"]], [old])
+        self.assertEqual(body["deleted"], [])
+        self.assertTrue((SRV.ws.root / old).is_dir())                              # preview deletes nothing
+        code, body = req("POST", "/api/runs/clean", {"older_than_days": 30})
+        self.assertEqual(body["deleted"], [old])
+        self.assertFalse((SRV.ws.root / old).exists())
+        self.assertTrue((SRV.ws.root / new).is_dir())
+        self.assertTrue((SRV.ws.root / busy).is_dir())                             # being analysed: skipped
+        for rid in (new, busy):
+            SRV.ws.delete(rid, force=True)
+
+    def test_clean_zero_days_and_bad_values(self):
+        rid = self.make_run("cl-zero", 0)
+        self.assertEqual(req("POST", "/api/runs/clean", {"older_than_days": "abc"})[0], 400)
+        self.assertEqual(req("POST", "/api/runs/clean", {"older_than_days": -1})[0], 400)
+        self.assertEqual(req("POST", "/api/runs/clean", {})[0], 400)
+        _, body = req("POST", "/api/runs/clean", {"older_than_days": 0})
+        self.assertIn(rid, body["deleted"])
+
+    def test_clean_needs_the_gui_header(self):
+        r = urllib.request.Request(BASE + "/api/runs/clean", data=b'{"older_than_days": 0}', method="POST")
+        with self.assertRaises(urllib.error.HTTPError) as cm:
+            urllib.request.urlopen(r)
+        self.assertEqual(cm.exception.code, 403)
+
+    def test_save_meta_retries_when_windows_denies_access(self):
+        rid = self.make_run("cl-retry", 0)
+        real, calls = os.replace, []
+
+        def flaky(src, dst):
+            calls.append(1)
+            if len(calls) < 3:
+                raise PermissionError(5, "Access is denied")
+            return real(src, dst)
+        os.replace = flaky
+        try:
+            meta = SRV.ws.meta(rid)
+            meta["name"] = "renamed"
+            SRV.ws.save_meta(rid, meta)
+        finally:
+            os.replace = real
+        self.assertEqual(SRV.ws.meta(rid)["name"], "renamed")
+        self.assertEqual(len(calls), 3)
+        SRV.ws.delete(rid, force=True)
+
+    def test_analysis_thread_crash_does_not_leave_run_running(self):
+        rid = self.make_run("cl-crash", 0, state="new")
+        real = server.subprocess.run
+
+        def boom(*a, **k):
+            raise OSError("cannot start")
+        server.subprocess.run = boom
+        try:
+            SRV.ws.analyse(rid, {})
+            for _ in range(100):
+                if SRV.ws.meta(rid)["job"]["state"] != "running":
+                    break
+                time.sleep(0.05)
+        finally:
+            server.subprocess.run = real
+        job = SRV.ws.meta(rid)["job"]
+        self.assertEqual(job["state"], "failed")
+        self.assertIn("cannot start", job["steps"][-1]["stderr"])
+        SRV.ws.delete(rid)
+
+    def test_run_left_running_by_a_stopped_server_is_closed_at_startup(self):
+        rid = self.make_run("cl-stale", 0, state="running")
+        server.Workspace(SRV.ws.root, (SRV.ws.logs_script, SRV.ws.tb_script))      # what a restart does
+        job = SRV.ws.meta(rid)["job"]
+        self.assertEqual(job["state"], "failed")
+        self.assertEqual(job["steps"][-1]["step"], "Interrupted")
+        SRV.ws.delete(rid)                                                        # now deletable without force
 
 
 class Security(unittest.TestCase):

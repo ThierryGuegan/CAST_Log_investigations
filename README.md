@@ -37,6 +37,7 @@ Options:
    - **All reports:** for your own use. It includes the working `triggers.json`; keep it for the next analysis.
    - **Share pack:** only for runs analysed with masking. It contains the masked reports and `triggers.shared.json`, never the internal `triggers.json`.
 8. **Analyse again.** On any run, re-run the analysis with other options (masking, thresholds) without uploading the logs again. The explanations already written are kept.
+9. **Clean old runs.** The button under "Add a run" removes the workspace copies of runs older than a number of days (0 = all). "Preview" lists what would go before anything is deleted. A run being analysed is skipped, and your original log folders are never touched. A single run can still be deleted from its Export tab.
 
 ## Privacy and security
 
