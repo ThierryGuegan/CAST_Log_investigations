@@ -111,6 +111,17 @@ class Archives(unittest.TestCase):
         self.assertIn("outside its folder", body["error"])
         self.assertFalse((Path(TMP) / "evil.log").exists())
 
+    def test_symlink_entry_is_refused(self):
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as zf:
+            info = zipfile.ZipInfo("link.log")
+            info.create_system = 3
+            info.external_attr = (0o120777 << 16)
+            zf.writestr(info, "/etc/passwd")
+        code, body = upload(buf.getvalue())
+        self.assertEqual(code, 400)
+        self.assertIn("symbolic link", body["error"])
+
     def test_not_a_zip_and_no_logs(self):
         self.assertEqual(upload(b"plain text")[0], 400)
         code, body = upload(zip_bytes({"readme.txt": "x"}))
