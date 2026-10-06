@@ -188,11 +188,15 @@ const FOLDERS = "cast-gui-folders";
 function recentFolders() { try { return JSON.parse(localStorage.getItem(FOLDERS)) || []; } catch (e) { return []; } }
 function rememberFolder(f) { try { localStorage.setItem(FOLDERS, JSON.stringify([f].concat(recentFolders().filter(x => x !== f)).slice(0, 8))); } catch (e) {} }
 const cleanPath = v => v.trim().replace(/^["']+|["']+$/g, "").trim();     // "Copy as path" adds quotes
+let LIMITS = null;                                                         // server limits, fetched once
+const fmtSize = b => b >= 1e9 ? (b / 1e9).toFixed(1) + " GB" : b >= 1e6 ? (b / 1e6).toFixed(0) + " MB" : Math.max(1, Math.round(b / 1e3)) + " KB";
+window.addEventListener("beforeunload", e => { if (UPLOAD) { e.preventDefault(); e.returnValue = ""; } });   // do not lose a running upload
 let UPLOAD = null;                                                         // the upload in progress, to cancel it
 
 function showAdd() {
   S.current = null; document.querySelectorAll("nav.runs li button").forEach(b => b.setAttribute("aria-current", "false"));
   const pf = loadPrefs();
+  if (!LIMITS) api("/api/limits").then(l => { LIMITS = l; }).catch(() => {});
   $("#main").innerHTML = `
   <h2>Add a run</h2>
   <p class="lead">Drop the zip of a run's logs, or give the path of a folder that contains them. Archives with one zip per phase are unpacked phase by phase.</p>
@@ -231,6 +235,10 @@ function showAdd() {
       hint(f.type === "" && f.size % 4096 === 0 ? "That looks like a folder. Browsers cannot read a dropped folder's path: type or paste its path in the folder box below." : "Only .zip archives can be added here. For loose .log files, give the path of their folder.", true);
       f = null;
     }
+    if (f && LIMITS && f.size > LIMITS.max_upload) {
+      hint(`This archive is ${fmtSize(f.size)}, more than the ${fmtSize(LIMITS.max_upload)} the server accepts. Give the path of the unpacked folder instead, or start the server with a higher --max-upload-gb.`, true);
+      f = null; input.value = "";
+    }
     file = f; if (file) { folder.value = ""; fcheck(); } refresh();
   };
   // live check of the folder: how many logs and runs it holds, before anything is created
@@ -243,7 +251,7 @@ function showAdd() {
       try {
         const r = await api("/api/folder/check", { method: "POST", json: { path: v } });
         if (cleanPath(folder.value) !== v) return;                      // typed on since
-        fnote(`${r.logs.toLocaleString("en")} log file${r.logs > 1 ? "s" : ""} found${r.runs_found.length ? `, ${r.runs_found.length} run${r.runs_found.length > 1 ? "s" : ""} (${r.runs_found.slice(0, 3).join(", ")}${r.runs_found.length > 3 ? ", …" : ""})` : ""}.`);
+        fnote(`${r.logs.toLocaleString("en")} log file${r.logs > 1 ? "s" : ""} (${fmtSize(r.bytes || 0)}) found${r.runs_found.length ? `, ${r.runs_found.length} run${r.runs_found.length > 1 ? "s" : ""} (${r.runs_found.slice(0, 3).join(", ")}${r.runs_found.length > 3 ? ", …" : ""})` : ""}.`);
         folderOk = true; folderName = r.name;
       } catch (e) { if (cleanPath(folder.value) !== v) return; folderOk = false; fnote(e.message, true); }
       refresh();
@@ -292,6 +300,8 @@ function uploadZip(file, name) {
 
 async function startAnalysis(file) {
   const msg = $("#addMsg"); const go = $("#go"); go.disabled = true;
+  const lock = on => document.querySelectorAll(".panel input, .panel summary").forEach(e => { e.disabled = on; if (e.tagName === "SUMMARY") e.style.pointerEvents = on ? "none" : ""; });
+  lock(true);
   const say = (t, err) => { msg.innerHTML = `<div class="msg ${err ? "err" : ""}">${esc(t)}</div>`; };
   try {
     const name = $("#name").value.trim();
@@ -308,7 +318,7 @@ async function startAnalysis(file) {
     }
     await api(`/api/runs/${encodeURIComponent(up.run.id)}/analyse`, { method: "POST", json: readOptions() });
     S.current = up.run.id; await loadRuns(up.run.id);
-  } catch (e) { say(e.message, true); go.disabled = false; $("#cancel").hidden = true; }
+  } catch (e) { say(e.message, true); go.disabled = false; lock(false); $("#cancel").hidden = true; }
 }
 
 /* ---------------------------------------------------------------- run view */

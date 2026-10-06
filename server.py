@@ -416,6 +416,8 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if not parts:
                 return self._send(200, (HERE / "index.html").read_bytes(), "text/html; charset=utf-8")
+            if parts == ["api", "limits"]:          # lets the page refuse an archive that is too big before uploading it
+                return self._send(200, {"max_upload": self.server.max_upload, "max_extract": self.server.max_extract})
             if parts == ["api", "runs"]:
                 return self._send(200, ws.list_runs())
             if len(parts) == 3 and parts[:2] == ["api", "runs"]:
@@ -462,7 +464,13 @@ class Handler(BaseHTTPRequestHandler):
                     return self._error(400, "That folder contains no .log file.")
                 runs = [str(p.relative_to(folder)) for p in logs if p.name == "0-analyze.log"]
                 if parts[-1] == "check":            # preview for the Add a run screen: creates nothing
-                    return self._send(200, {"logs": len(logs), "runs_found": runs, "name": folder.name})
+                    size = 0
+                    for p in logs:
+                        try:
+                            size += p.stat().st_size
+                        except OSError:
+                            pass
+                    return self._send(200, {"logs": len(logs), "runs_found": runs, "name": folder.name, "bytes": size})
                 meta = ws.new_run(body.get("name") or folder.name, input_path=folder)
                 return self._send(200, {"run": meta, "logs": len(logs), "runs_found": runs})
             if parts == ["api", "runs", "clean"]:
