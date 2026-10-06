@@ -30,7 +30,7 @@ Options:
    - **The timeline** shows each log as a bar. Hatched parts are silences; hover over one to see the last line before it. A silence after a source file starts is processing; after an external command or plugin starts, it is a wait.
 3. **Tracebacks.** The Python tracebacks, grouped, each with its first traceback and its explanation.
 4. **Explanations.** Write one or two sentences per traceback group. Saving updates the report and keeps a backup of the previous version.
-5. **Warnings.** Every warning and error pattern, with the log that produced it. "Only errors and failure-like messages" shows the rare messages that are often the most important.
+5. **Warnings.** Every warning and error pattern, with the log that produced it. "Only errors and failure-like messages" shows the rare messages that are often the most important. Every column has its own filter (level, text, minimum count) and a click on a column title sorts by it (click again to reverse, a third time to clear). "Clear filters and sorting" resets them.
 6. **Compare runs.** Step durations, error groups and warning patterns, side by side with another run.
 7. **Export.**
    - **All reports:** for your own use. It includes the working `triggers.json`; keep it for the next analysis.

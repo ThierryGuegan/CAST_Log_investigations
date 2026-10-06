@@ -55,6 +55,10 @@ p.lead { color: var(--muted); margin: 0 0 18px; max-width: 75ch; }
 table { border-collapse: collapse; width: 100%; font-size: 13.5px; background: var(--surface); }
 th, td { text-align: left; padding: 6px 9px; border-bottom: 1px solid var(--line); vertical-align: top; }
 th { font-weight: 600; color: var(--muted); background: #eef2f6; position: sticky; top: 0; }
+.sortbtn { all: unset; cursor: pointer; font-weight: 600; color: inherit; white-space: nowrap; }
+.sortbtn:focus-visible { outline: 2px solid var(--steel); outline-offset: 2px; }
+.frow td { padding: 4px 6px; background: #f6f8fa; }
+.frow input, .frow select { width: 100%; min-width: 70px; padding: 4px 6px; border: 1px solid var(--line); border-radius: 4px; background: #fff; font-size: 12.5px; }
 td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 td code, .code { font-family: var(--mono); font-size: 12.5px; overflow-wrap: anywhere; }
 .tablewrap { overflow: auto; max-height: 70vh; border: 1px solid var(--line); border-radius: 4px; }
@@ -240,7 +244,7 @@ async function startAnalysis(file) {
 
 /* ---------------------------------------------------------------- run view */
 async function openRun(id) {
-  S.current = id; S.compareResults = null;
+  S.current = id; S.compareResults = null; S.wf = null;
   document.querySelectorAll("nav.runs li button").forEach((b, i) => b.setAttribute("aria-current", String(S.runs[i] && S.runs[i].id === id)));
   const meta = await api(`/api/runs/${encodeURIComponent(id)}`);
   if (meta.job.state === "running" || meta.job.state === "new") return showRunning(meta);
@@ -399,22 +403,67 @@ function tabWarnings() {
   const T = S.results.tracebacks, el = $("#tab");
   if (!T) { el.innerHTML = '<p class="empty">No warning report yet.</p>'; return; }
   const P = T.problems, groups = P.groups;
+  // one entry per column: how to read its text/number, how to show it, which filter it has
+  const logsOf = g => Object.keys(g.by_file || {}).map(f => f.split(/[\\/]/).pop()).join(" ");
+  const COLS = [
+    { k: "level", label: "Level", get: g => g.level || "", filter: "select" },
+    { k: "log", label: "Log", get: g => logsOf(g), sort: g => mainLog(g).toLowerCase(), filter: "text" },
+    { k: "source", label: "Source", get: g => g.source || "", filter: "text" },
+    { k: "code", label: "Code", get: g => g.code || "", filter: "text" },
+    { k: "template", label: "Message pattern", get: g => g.template || "", filter: "text" },
+    { k: "count", label: "Count", get: g => g.count || 0, num: true, filter: "min" },
+    { k: "values", label: "Sample values", get: g => (g.values || []).join(" "), filter: "text" },
+  ];
+  const F = S.wf = S.wf || { q: "", onlyBad: false, cols: {}, sort: null };   // kept while the page is open
+  const levels = [...new Set(groups.map(g => g.level || ""))].sort();
+  const filterCell = c => c.filter === "select"
+    ? `<td><select data-f="${c.k}" aria-label="Filter ${esc(c.label)}"><option value="">All</option>${levels.map(l => `<option>${esc(l)}</option>`).join("")}</select></td>`
+    : `<td class="${c.num ? "num" : ""}"><input type="${c.filter === "min" ? "number" : "text"}" data-f="${c.k}" min="0" placeholder="${c.filter === "min" ? "min" : "contains"}" aria-label="Filter ${esc(c.label)}"></td>`;
   el.innerHTML = `<p class="lead">${Object.entries(P.totals).map(([k, v]) => `${v.toLocaleString("en")} ${k.toLowerCase()} lines`).join(", ") || "No warnings or errors"} in ${groups.length} patterns. Check a pattern's log and sample values before drawing conclusions: many lines with few distinct values usually mean one repeated, harmless situation.</p>
     <div class="filter"><input type="text" id="q" placeholder="Filter by text, log or source" aria-label="Filter patterns">
-      <label class="check" style="margin:0"><input type="checkbox" id="onlyBad"> Only errors and failure-like messages</label></div>
-    <div class="tablewrap"><table><thead><tr><th>Level</th><th>Log</th><th>Source</th><th>Code</th><th>Message pattern</th><th class="num">Count</th><th>Sample values</th></tr></thead><tbody id="wb"></tbody></table></div>`;
+      <label class="check" style="margin:0"><input type="checkbox" id="onlyBad"> Only errors and failure-like messages</label>
+      <span class="note" id="wcount"></span><button class="btn secondary" id="wreset" type="button" style="padding:4px 10px">Clear filters and sorting</button></div>
+    <div class="tablewrap"><table><thead>
+      <tr>${COLS.map(c => `<th class="${c.num ? "num" : ""}" aria-sort="none"><button type="button" class="sortbtn" data-s="${c.k}">${esc(c.label)}<span class="arrow"></span></button></th>`).join("")}</tr>
+      <tr class="frow">${COLS.map(filterCell).join("")}</tr></thead><tbody id="wb"></tbody></table></div>`;
+  const isBad = g => g.level !== "WARNING" || FAILURE.test(g.template);
   const draw = () => {
-    const q = $("#q").value.toLowerCase(), only = $("#onlyBad").checked;
-    $("#wb").innerHTML = groups.filter(g => {
-      const bad = g.level !== "WARNING" || FAILURE.test(g.template);
-      if (only && !bad) return false;
-      return !q || (g.template + " " + mainLog(g) + " " + g.source + " " + g.code).toLowerCase().includes(q);
-    }).map(g => { const bad = g.level !== "WARNING" || FAILURE.test(g.template);
+    const q = F.q.toLowerCase();
+    let rows = groups.filter(g => {
+      if (F.onlyBad && !isBad(g)) return false;
+      if (q && !(g.template + " " + logsOf(g) + " " + g.source + " " + g.code).toLowerCase().includes(q)) return false;
+      return COLS.every(c => {
+        const v = F.cols[c.k]; if (v === undefined || v === "") return true;
+        return c.filter === "select" ? c.get(g) === v : c.filter === "min" ? c.get(g) >= Number(v) : String(c.get(g)).toLowerCase().includes(String(v).toLowerCase());
+      });
+    });
+    if (F.sort) {
+      const c = COLS.find(x => x.k === F.sort.k), dir = F.sort.dir === "asc" ? 1 : -1;
+      const key = g => c.num ? c.get(g) : String(c.sort ? c.sort(g) : c.get(g)).toLowerCase();
+      rows = rows.map((g, i) => [g, i]).sort((a, b) => { const x = key(a[0]), y = key(b[0]); return (x < y ? -1 : x > y ? 1 : 0) * dir || a[1] - b[1]; }).map(r => r[0]);
+    }
+    $("#wb").innerHTML = rows.map(g => { const bad = isBad(g);
       return `<tr><td class="${g.level === "WARNING" ? "warn" : "bad"}">${esc(g.level)}</td><td><code>${esc(mainLog(g))}</code></td><td><code>${esc(g.source || "—")}</code></td><td><code>${esc(g.code || "—")}</code></td>
       <td><code>${esc(g.template)}</code>${bad && g.level === "WARNING" ? '<span class="tag">mentions a failure</span>' : ""}</td><td class="num">${g.count.toLocaleString("en")}</td>
       <td>${(g.values || []).slice(0, 4).map(v => `<code>${esc(v)}</code>`).join(", ") || "—"}</td></tr>`; }).join("") || '<tr><td colspan="7" class="note">No pattern matches.</td></tr>';
+    $("#wcount").textContent = `${rows.length} of ${groups.length} patterns`;
+    el.querySelectorAll("th[aria-sort]").forEach(th => {
+      const k = th.querySelector("[data-s]").dataset.s, on = F.sort && F.sort.k === k;
+      th.setAttribute("aria-sort", on ? (F.sort.dir === "asc" ? "ascending" : "descending") : "none");
+      th.querySelector(".arrow").textContent = on ? (F.sort.dir === "asc" ? " ▲" : " ▼") : "";
+    });
   };
-  $("#q").oninput = draw; $("#onlyBad").onchange = draw; draw();
+  $("#q").value = F.q; $("#onlyBad").checked = F.onlyBad;
+  el.querySelectorAll("[data-f]").forEach(i => { i.value = F.cols[i.dataset.f] || ""; i.oninput = i.onchange = () => { F.cols[i.dataset.f] = i.value; draw(); }; });
+  el.querySelectorAll("[data-s]").forEach(b => b.onclick = () => {   // none -> ascending -> descending -> none
+    const k = b.dataset.s;
+    F.sort = !F.sort || F.sort.k !== k ? { k, dir: COLS.find(c => c.k === k).num ? "desc" : "asc" } : (F.sort.dir === (COLS.find(c => c.k === k).num ? "desc" : "asc") ? { k, dir: COLS.find(c => c.k === k).num ? "asc" : "desc" } : null);
+    draw();
+  });
+  $("#q").oninput = () => { F.q = $("#q").value; draw(); };
+  $("#onlyBad").onchange = () => { F.onlyBad = $("#onlyBad").checked; draw(); };
+  $("#wreset").onclick = () => { S.wf = null; tabWarnings(); };
+  draw();
 }
 
 /* ---- explanations */
