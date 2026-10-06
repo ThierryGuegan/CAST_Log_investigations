@@ -77,6 +77,10 @@ pre.tb { font: 12px/1.45 var(--mono); background: #e9eef3; border: 1px solid var
 textarea { width: 100%; min-height: 84px; padding: 8px; border: 1px solid var(--line); border-radius: 4px; background: #fff; resize: vertical; }
 .panel { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 20px 22px; max-width: 860px; }
 .drop { border: 2px dashed var(--hatch); border-radius: 6px; padding: 26px; text-align: center; color: var(--muted); cursor: pointer; }
+.drop.chosen { border-style: solid; border-color: var(--steel); color: var(--ink); }
+details.adv { margin-top: 12px; }
+details.adv > summary { cursor: pointer; color: var(--steel); font-weight: 600; }
+details.adv > fieldset { margin-top: 8px; }
 .drop.over { border-color: var(--steel); background: #e3eaf0; color: var(--ink); }
 fieldset { border: 1px solid var(--line); border-radius: 4px; margin: 16px 0 0; padding: 10px 14px 14px; }
 legend { padding: 0 6px; color: var(--muted); font-size: 13px; }
@@ -153,7 +157,7 @@ async function loadRuns(selectId) {
 }
 
 /* ---------------------------------------------------------------- analysis options (shared) */
-function optionsHTML(o) {
+function optionsHTML(o, collapse) {
   o = o || {}; const terms = (o.redact_terms || []).join(", ");
   return `<fieldset><legend>Privacy</legend>
       <div class="check"><input type="checkbox" id="redact" ${o.redact ? "checked" : ""}><label for="redact" style="margin:0">Mask hosts, IP addresses, user names and customer paths</label></div>
@@ -161,14 +165,14 @@ function optionsHTML(o) {
       <input type="text" id="terms" placeholder="acme, projectX" value="${esc(terms)}">
       <p class="note">Credentials are always masked. Masking is needed before sharing a report outside the company.</p>
     </fieldset>
-    <fieldset><legend>Report settings</legend>
+    ${collapse ? "<details class=\"adv\"><summary>Report settings</summary>" : ""}<fieldset><legend>Report settings</legend>
       <div class="row">
         <div><label for="gap">Silence threshold (minutes)</label><input type="number" id="gap" value="${esc(o.gap_minutes != null ? o.gap_minutes : 5)}" min="0"></div>
         <div><label for="tw">Warning patterns shown</label><input type="number" id="tw" value="${esc(o.top_warnings != null ? o.top_warnings : 30)}" min="0"></div>
         <div><label for="te">Error groups shown in full</label><input type="number" id="te" value="${esc(o.top_errors != null ? o.top_errors : 50)}" min="0"></div>
         <div><label for="ts">Silences listed</label><input type="number" id="ts" value="${esc(o.top_silences != null ? o.top_silences : 20)}" min="0"></div>
       </div>
-    </fieldset>`;
+    </fieldset>${collapse ? "</details>" : ""}`;
 }
 function readOptions() {
   return { redact: $("#redact").checked, redact_terms: $("#terms").value, gap_minutes: +$("#gap").value || 5,
@@ -176,52 +180,61 @@ function readOptions() {
 }
 
 /* ---------------------------------------------------------------- add a run */
+const PREFS = "cast-gui-privacy";
+function loadPrefs() { try { return JSON.parse(localStorage.getItem(PREFS)) || {}; } catch (e) { return {}; } }
+function savePrefs() { try { localStorage.setItem(PREFS, JSON.stringify({ redact: $("#redact").checked, redact_terms: $("#terms").value.split(",").map(t => t.trim()).filter(Boolean) })); } catch (e) {} }
+
 function showAdd() {
   S.current = null; document.querySelectorAll("nav.runs li button").forEach(b => b.setAttribute("aria-current", "false"));
+  const pf = loadPrefs();
   $("#main").innerHTML = `
   <h2>Add a run</h2>
   <p class="lead">Drop the zip of a run's logs, or give the path of a folder that contains them. Archives with one zip per phase are unpacked phase by phase.</p>
   <div class="panel">
     <div class="drop" id="drop" tabindex="0" role="button" aria-label="Choose a zip archive">Drop a .zip here, or click to choose one<input type="file" id="file" accept=".zip" hidden></div>
     <label for="folder">Or a folder on this computer</label>
-    <input type="text" id="folder" placeholder="C:\\CAST\\logs\\MyApp_2026-09-26 or /data/cast/logs/run">
+    <input type="text" id="folder" placeholder="C:\\CAST\\logs\\MyApp_2026-09-26 or /data/cast/logs/run" autocomplete="off" spellcheck="false">
     <label for="name">Name of the run (optional)</label>
     <input type="text" id="name" placeholder="Taken from the archive or folder name">
-    ${optionsHTML({})}
-    <fieldset><legend>Earlier explanations</legend>
-      <label for="trig">Explanations from an earlier analysis of this application (triggers.json, optional)</label>
+    ${optionsHTML({ redact: pf.redact, redact_terms: pf.redact_terms }, true)}
+    <p class="note" style="margin-top:6px">Your masking choices are remembered in this browser only.</p>
+    <details class="adv"><summary>Earlier explanations (optional)</summary><fieldset><legend>Earlier explanations</legend>
+      <label for="trig">Explanations from an earlier analysis of this application (triggers.json)</label>
       <input type="file" id="trig" accept=".json">
-    </fieldset>
-    <div class="actions"><button class="btn" id="go" disabled>Analyse</button><span class="note" id="chosen">No archive or folder chosen yet.</span></div>
+    </fieldset></details>
+    <div class="actions"><button class="btn" id="go" disabled>Analyse</button><span class="note" id="chosen" aria-live="polite">No archive or folder chosen yet.</span></div>
     <div class="progress" hidden id="prog"><div></div></div>
-    <div id="addMsg"></div>
+    <div id="addMsg" aria-live="polite"></div>
   </div>`;
   let file = null;
-  const drop = $("#drop"), input = $("#file"), go = $("#go"), chosen = $("#chosen");
-  const refresh = () => { go.disabled = !(file || $("#folder").value.trim());
-    chosen.textContent = file ? `Archive: ${file.name} (${(file.size / 1e6).toFixed(1)} MB)` : $("#folder").value.trim() ? "Folder: " + $("#folder").value.trim() : "No archive or folder chosen yet."; };
+  const drop = $("#drop"), input = $("#file"), go = $("#go"), chosen = $("#chosen"), folder = $("#folder");
+  const hint = (t, err) => { $("#addMsg").innerHTML = t ? `<div class="msg ${err ? "err" : ""}">${esc(t)}</div>` : ""; };
+  const refresh = () => {
+    go.disabled = !(file || folder.value.trim());
+    drop.classList.toggle("chosen", !!file);
+    drop.firstChild.textContent = file ? `${file.name} (${(file.size / 1e6).toFixed(1)} MB). Click to choose another.` : "Drop a .zip here, or click to choose one";
+    chosen.textContent = file ? "Archive chosen." : folder.value.trim() ? "Folder: " + folder.value.trim() : "No archive or folder chosen yet.";
+  };
+  const take = f => {                          // one source at a time: an archive or a folder
+    hint("");
+    if (f && !/\.zip$/i.test(f.name)) {
+      hint(f.type === "" && f.size % 4096 === 0 ? "That looks like a folder. Browsers cannot read a dropped folder's path: type or paste its path in the folder box below." : "Only .zip archives can be added here. For loose .log files, give the path of their folder.", true);
+      f = null;
+    }
+    file = f; if (file) folder.value = ""; refresh();
+  };
   drop.onclick = () => input.click();
   drop.onkeydown = e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); input.click(); } };
-  input.onchange = () => { file = input.files[0] || null; refresh(); };
+  input.onchange = () => take(input.files[0] || null);
   drop.ondragover = e => { e.preventDefault(); drop.classList.add("over"); };
   drop.ondragleave = () => drop.classList.remove("over");
-  drop.ondrop = e => { e.preventDefault(); drop.classList.remove("over"); file = e.dataTransfer.files[0] || null; refresh(); };
-  $("#folder").oninput = refresh;
+  drop.ondrop = e => { e.preventDefault(); drop.classList.remove("over"); const fl = e.dataTransfer.files;
+    take(fl[0] || null); if (fl.length > 1) hint("Several files dropped: only the first one is used. Put the logs of one run in a single zip.", true); };
+  folder.oninput = () => { if (folder.value.trim() && file) { file = null; input.value = ""; } hint(""); refresh(); };
+  const enter = e => { if (e.key === "Enter" && !go.disabled) go.click(); };
+  folder.onkeydown = enter; $("#name").onkeydown = enter;
+  $("#redact").onchange = savePrefs; $("#terms").onchange = savePrefs;
   go.onclick = () => startAnalysis(file);
-}
-
-function uploadZip(file, name) {
-  return new Promise((resolve, reject) => {
-    const x = new XMLHttpRequest(); const bar = $("#prog"); bar.hidden = false;
-    x.open("POST", "/api/upload"); x.setRequestHeader("X-CAST-GUI", "1");
-    x.setRequestHeader("X-Filename", encodeURIComponent(file.name).replace(/%/g, "_"));
-    if (name) x.setRequestHeader("X-Run-Name", name.replace(/[^\x20-\x7E]/g, "_"));
-    x.upload.onprogress = e => { if (e.lengthComputable) $("div", bar).style.width = (100 * e.loaded / e.total) + "%"; };
-    x.onload = () => { let b = {}; try { b = JSON.parse(x.responseText); } catch (e) {}
-      x.status === 200 ? resolve(b) : reject(new Error(b.error || "Upload failed (" + x.status + ")")); };
-    x.onerror = () => reject(new Error("Upload failed: the server did not answer."));
-    x.send(file);
-  });
 }
 
 async function startAnalysis(file) {
@@ -229,7 +242,8 @@ async function startAnalysis(file) {
   const say = (t, err) => { msg.innerHTML = `<div class="msg ${err ? "err" : ""}">${esc(t)}</div>`; };
   try {
     const name = $("#name").value.trim();
-    say(file ? "Uploading and unpacking…" : "Checking the folder…");
+    savePrefs();
+    say(file ? "Uploading…" : "Checking the folder…");
     const up = file ? await uploadZip(file, name) : await api("/api/folder", { method: "POST", json: { path: $("#folder").value.trim(), name } });
     if (up.runs_found && up.runs_found.length > 1)
       say(`Note: ${up.runs_found.length} runs found in this input (${up.runs_found.join(", ")}); their figures will be combined.`);
