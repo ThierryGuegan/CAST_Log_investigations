@@ -1,0 +1,452 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CAST run inspector</title>
+<style>
+:root {
+  --paper: #E8EDF1; --surface: #F7F9FB; --ink: #1D2B38; --steel: #4D6A83; --muted: #61758A;
+  --line: #C6D1DB; --ok: #2E7656; --warn: #9C6410; --bad: #A33838; --hatch: #8FA3B6; --focus: #2F6FB0;
+  --mono: ui-monospace, "Cascadia Mono", Consolas, "Liberation Mono", monospace;
+  --sans: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body { background: var(--paper); color: var(--ink); font: 15px/1.5 var(--sans); }
+button, input, select, textarea { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+a { color: var(--steel); }
+.app { display: grid; grid-template-columns: 270px 1fr; grid-template-rows: auto 1fr; height: 100vh; }
+header { grid-column: 1 / -1; display: flex; align-items: baseline; gap: 16px; padding: 14px 22px;
+  border-bottom: 1px solid var(--line); background: var(--surface); }
+header h1 { margin: 0; font-size: 19px; font-weight: 650; letter-spacing: -0.01em; }
+header .sub { color: var(--muted); font-size: 13px; }
+nav.runs { border-right: 1px solid var(--line); overflow: auto; padding: 14px 12px; }
+nav.runs button.add { width: 100%; padding: 9px 12px; border: 1px solid var(--steel); background: var(--steel);
+  color: #fff; border-radius: 6px; cursor: pointer; font-weight: 600; }
+nav.runs ul { list-style: none; margin: 14px 0 0; padding: 0; }
+nav.runs li button { width: 100%; text-align: left; padding: 9px 10px; border: 0; background: none; border-radius: 6px;
+  cursor: pointer; display: block; }
+nav.runs li button:hover { background: #dde5ec; }
+nav.runs li button[aria-current="true"] { background: #d3dde7; }
+nav.runs .rn { display: block; font-weight: 600; font-size: 14px; overflow-wrap: anywhere; }
+nav.runs .rm { display: block; font-size: 12px; color: var(--muted); }
+main { overflow: auto; padding: 22px 28px 60px; }
+.dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; vertical-align: 1px; background: var(--hatch); }
+.s-Completed { background: var(--ok); } .s-Failed { background: var(--bad); } .s-Did-not-finish { background: var(--warn); }
+h2 { font-size: 22px; margin: 0 0 4px; font-weight: 650; letter-spacing: -0.01em; overflow-wrap: anywhere; }
+h3 { font-size: 16px; margin: 28px 0 10px; font-weight: 650; }
+p.lead { color: var(--muted); margin: 0 0 18px; max-width: 75ch; }
+.tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--line); margin: 18px 0 20px; flex-wrap: wrap; }
+.tabs button { border: 0; background: none; padding: 9px 14px; cursor: pointer; color: var(--muted);
+  border-bottom: 2px solid transparent; margin-bottom: -1px; }
+.tabs button[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--ink); font-weight: 600; }
+.status { display: grid; grid-template-columns: auto 1fr; gap: 6px 18px; align-items: baseline; padding: 16px 18px;
+  background: var(--surface); border: 1px solid var(--line); border-left: 6px solid var(--hatch); border-radius: 4px; }
+.status.Completed { border-left-color: var(--ok); } .status.Failed { border-left-color: var(--bad); }
+.status.Did-not-finish { border-left-color: var(--warn); }
+.status .word { font-size: 26px; font-weight: 700; letter-spacing: -0.02em; }
+.status .why { color: var(--ink); max-width: 80ch; }
+.figures { display: flex; flex-wrap: wrap; gap: 10px 34px; margin: 18px 0 4px; }
+.figures div { min-width: 120px; }
+.figures b { display: block; font-size: 22px; font-variant-numeric: tabular-nums; font-weight: 650; }
+.figures span { font-size: 13px; color: var(--muted); }
+table { border-collapse: collapse; width: 100%; font-size: 13.5px; background: var(--surface); }
+th, td { text-align: left; padding: 6px 9px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font-weight: 600; color: var(--muted); background: #eef2f6; position: sticky; top: 0; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+td code, .code { font-family: var(--mono); font-size: 12.5px; overflow-wrap: anywhere; }
+.tablewrap { overflow: auto; max-height: 70vh; border: 1px solid var(--line); border-radius: 4px; }
+.bad { color: var(--bad); font-weight: 600; } .warn { color: var(--warn); font-weight: 600; } .ok { color: var(--ok); }
+.timeline { background: var(--surface); border: 1px solid var(--line); border-radius: 4px; padding: 10px 6px 4px; overflow-x: auto; }
+.timeline svg { display: block; }
+.legend { display: flex; gap: 18px; font-size: 12.5px; color: var(--muted); margin: 8px 4px 0; flex-wrap: wrap; }
+.legend i { display: inline-block; width: 22px; height: 10px; vertical-align: -1px; margin-right: 6px; }
+pre.tb { font: 12px/1.45 var(--mono); background: #e9eef3; border: 1px solid var(--line); border-radius: 4px; padding: 10px 12px;
+  overflow: auto; max-height: 340px; white-space: pre; }
+.group { border: 1px solid var(--line); background: var(--surface); border-radius: 4px; padding: 14px 16px; margin-bottom: 14px; }
+.group h4 { margin: 0 0 8px; font-size: 14.5px; font-family: var(--mono); font-weight: 600; overflow-wrap: anywhere; }
+.kv { display: grid; grid-template-columns: max-content 1fr; gap: 3px 14px; font-size: 13.5px; margin-bottom: 8px; }
+.kv dt { color: var(--muted); } .kv dd { margin: 0; overflow-wrap: anywhere; }
+.trigger { border-left: 3px solid var(--steel); padding: 4px 10px; margin: 8px 0; background: #eef2f6; max-width: 90ch; }
+textarea { width: 100%; min-height: 84px; padding: 8px; border: 1px solid var(--line); border-radius: 4px; background: #fff; resize: vertical; }
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 20px 22px; max-width: 860px; }
+.drop { border: 2px dashed var(--hatch); border-radius: 6px; padding: 26px; text-align: center; color: var(--muted); cursor: pointer; }
+.drop.over { border-color: var(--steel); background: #e3eaf0; color: var(--ink); }
+fieldset { border: 1px solid var(--line); border-radius: 4px; margin: 16px 0 0; padding: 10px 14px 14px; }
+legend { padding: 0 6px; color: var(--muted); font-size: 13px; }
+label { display: block; font-size: 13.5px; margin: 8px 0 3px; }
+input[type=text], input[type=number] { width: 100%; padding: 7px 9px; border: 1px solid var(--line); border-radius: 4px; background: #fff; }
+.row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+.check { display: flex; gap: 8px; align-items: center; margin-top: 10px; }
+.check input { width: auto; }
+.btn { padding: 8px 16px; border-radius: 6px; border: 1px solid var(--steel); background: var(--steel); color: #fff; cursor: pointer; font-weight: 600; }
+.btn.secondary { background: transparent; color: var(--steel); }
+.btn:disabled { opacity: .5; cursor: not-allowed; }
+.actions { display: flex; gap: 10px; margin-top: 18px; flex-wrap: wrap; align-items: center; }
+.note { font-size: 13px; color: var(--muted); }
+.msg { margin-top: 12px; padding: 9px 12px; border-radius: 4px; background: #e3eaf0; }
+.msg.err { background: #f3dede; color: var(--bad); }
+.progress { height: 6px; background: var(--line); border-radius: 3px; overflow: hidden; margin-top: 10px; }
+.progress div { height: 100%; width: 0; background: var(--steel); transition: width .2s; }
+.filter { display: flex; gap: 14px; align-items: center; margin-bottom: 10px; flex-wrap: wrap; }
+.filter input[type=text] { max-width: 320px; }
+.tag { display: inline-block; font-size: 11.5px; padding: 0 6px; border-radius: 3px; background: #f3dede; color: var(--bad); margin-left: 6px; }
+details summary { cursor: pointer; color: var(--steel); font-size: 13.5px; margin: 6px 0; }
+.empty { padding: 40px 0; color: var(--muted); max-width: 60ch; }
+@media (max-width: 860px) {
+  .app { grid-template-columns: 1fr; grid-template-rows: auto auto 1fr; height: auto; }
+  nav.runs { border-right: 0; border-bottom: 1px solid var(--line); max-height: 40vh; }
+  main { padding: 18px 14px 50px; } .row { grid-template-columns: 1fr 1fr; }
+}
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+<div class="app">
+  <header><h1>CAST run inspector</h1><span class="sub">Local analysis of CAST deep-analysis logs. Nothing leaves this computer.</span></header>
+  <nav class="runs" aria-label="Runs">
+    <button class="add" id="addRun">Add a run</button>
+    <ul id="runList"></ul>
+  </nav>
+  <main id="main"></main>
+</div>
+<script>
+"use strict";
+const S = { runs: [], current: null, results: null, tab: "overview", compareWith: null, compareResults: null };
+const $ = (sel, el = document) => el.querySelector(sel);
+const esc = s => String(s == null ? "" : s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const statusClass = s => (s || "").replace(/\s+/g, "-");
+const FAILURE = /fail|error|exception|abort|crash/i;
+
+async function api(path, opts = {}) {
+  const o = Object.assign({ headers: {} }, opts);
+  if (o.method && o.method !== "GET") o.headers["X-CAST-GUI"] = "1";
+  if (o.json !== undefined) { o.body = JSON.stringify(o.json); o.headers["Content-Type"] = "application/json"; }
+  const r = await fetch(path, o);
+  const ct = r.headers.get("Content-Type") || "";
+  const body = ct.includes("json") ? await r.json() : await r.text();
+  if (!r.ok) throw new Error((body && body.error) || ("HTTP " + r.status));
+  return body;
+}
+
+/* ---------------------------------------------------------------- runs list */
+async function loadRuns(selectId) {
+  S.runs = await api("/api/runs");
+  const ul = $("#runList"); ul.innerHTML = "";
+  for (const r of S.runs) {
+    const li = document.createElement("li"); const b = document.createElement("button");
+    b.setAttribute("aria-current", String(r.id === S.current));
+    const label = r.state === "running" ? "Analysing…" : r.state === "failed" ? "Analysis failed" : (r.status || "Not analysed");
+    b.innerHTML = `<span class="rn">${esc(r.name)}</span><span class="rm"><span class="dot s-${esc(statusClass(r.status))}"></span>${esc(label)} · ${esc(r.created.replace("T", " "))}</span>`;
+    b.onclick = () => openRun(r.id);
+    li.appendChild(b); ul.appendChild(li);
+  }
+  if (selectId) openRun(selectId);
+  else if (!S.current) S.runs.length ? openRun(S.runs[0].id) : showAdd();
+}
+
+/* ---------------------------------------------------------------- add a run */
+function showAdd() {
+  S.current = null; document.querySelectorAll("nav.runs li button").forEach(b => b.setAttribute("aria-current", "false"));
+  $("#main").innerHTML = `
+  <h2>Add a run</h2>
+  <p class="lead">Drop the zip of a run's logs, or give the path of a folder that contains them. Archives with one zip per phase are unpacked phase by phase.</p>
+  <div class="panel">
+    <div class="drop" id="drop" tabindex="0" role="button" aria-label="Choose a zip archive">Drop a .zip here, or click to choose one<input type="file" id="file" accept=".zip" hidden></div>
+    <label for="folder">Or a folder on this computer</label>
+    <input type="text" id="folder" placeholder="C:\\CAST\\logs\\MyApp_2026-09-26 or /data/cast/logs/run">
+    <label for="name">Name of the run (optional)</label>
+    <input type="text" id="name" placeholder="Taken from the archive or folder name">
+    <fieldset><legend>Privacy</legend>
+      <div class="check"><input type="checkbox" id="redact"><label for="redact" style="margin:0">Mask hosts, IP addresses, user names and customer paths</label></div>
+      <label for="terms">Names to mask, separated by commas (customer, project, company)</label>
+      <input type="text" id="terms" placeholder="acme, projectX">
+      <p class="note">Credentials are always masked. Masking is needed before sharing a report outside the company.</p>
+    </fieldset>
+    <fieldset><legend>Report settings</legend>
+      <div class="row">
+        <div><label for="gap">Silence threshold (minutes)</label><input type="number" id="gap" value="5" min="0"></div>
+        <div><label for="tw">Warning patterns shown</label><input type="number" id="tw" value="30" min="0"></div>
+        <div><label for="te">Error groups shown in full</label><input type="number" id="te" value="50" min="0"></div>
+        <div><label for="ts">Silences listed</label><input type="number" id="ts" value="20" min="0"></div>
+      </div>
+      <label for="trig">Explanations from an earlier analysis (triggers.json, optional)</label>
+      <input type="file" id="trig" accept=".json">
+    </fieldset>
+    <div class="actions"><button class="btn" id="go" disabled>Analyse</button><span class="note" id="chosen">No archive or folder chosen yet.</span></div>
+    <div class="progress" hidden id="prog"><div></div></div>
+    <div id="addMsg"></div>
+  </div>`;
+  let file = null;
+  const drop = $("#drop"), input = $("#file"), go = $("#go"), chosen = $("#chosen");
+  const refresh = () => { go.disabled = !(file || $("#folder").value.trim());
+    chosen.textContent = file ? `Archive: ${file.name} (${(file.size / 1e6).toFixed(1)} MB)` : $("#folder").value.trim() ? "Folder: " + $("#folder").value.trim() : "No archive or folder chosen yet."; };
+  drop.onclick = () => input.click();
+  drop.onkeydown = e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); input.click(); } };
+  input.onchange = () => { file = input.files[0] || null; refresh(); };
+  drop.ondragover = e => { e.preventDefault(); drop.classList.add("over"); };
+  drop.ondragleave = () => drop.classList.remove("over");
+  drop.ondrop = e => { e.preventDefault(); drop.classList.remove("over"); file = e.dataTransfer.files[0] || null; refresh(); };
+  $("#folder").oninput = refresh;
+  go.onclick = () => startAnalysis(file);
+}
+
+function uploadZip(file, name) {
+  return new Promise((resolve, reject) => {
+    const x = new XMLHttpRequest(); const bar = $("#prog"); bar.hidden = false;
+    x.open("POST", "/api/upload"); x.setRequestHeader("X-CAST-GUI", "1");
+    x.setRequestHeader("X-Filename", encodeURIComponent(file.name).replace(/%/g, "_"));
+    if (name) x.setRequestHeader("X-Run-Name", name.replace(/[^\x20-\x7E]/g, "_"));
+    x.upload.onprogress = e => { if (e.lengthComputable) $("div", bar).style.width = (100 * e.loaded / e.total) + "%"; };
+    x.onload = () => { let b = {}; try { b = JSON.parse(x.responseText); } catch (e) {}
+      x.status === 200 ? resolve(b) : reject(new Error(b.error || "Upload failed (" + x.status + ")")); };
+    x.onerror = () => reject(new Error("Upload failed: the server did not answer."));
+    x.send(file);
+  });
+}
+
+async function startAnalysis(file) {
+  const msg = $("#addMsg"); const go = $("#go"); go.disabled = true;
+  const say = (t, err) => { msg.innerHTML = `<div class="msg ${err ? "err" : ""}">${esc(t)}</div>`; };
+  try {
+    const name = $("#name").value.trim();
+    say(file ? "Uploading and unpacking…" : "Checking the folder…");
+    const up = file ? await uploadZip(file, name) : await api("/api/folder", { method: "POST", json: { path: $("#folder").value.trim(), name } });
+    if (up.runs_found && up.runs_found.length > 1)
+      say(`Note: ${up.runs_found.length} runs found in this input (${up.runs_found.join(", ")}); their figures will be combined.`);
+    const tf = $("#trig").files[0];
+    if (tf) {
+      let obj; try { obj = JSON.parse(await tf.text()); } catch (e) { throw new Error("The explanations file is not valid JSON: " + e.message); }
+      await api(`/api/runs/${encodeURIComponent(up.run.id)}/import-triggers`, { method: "POST", json: obj });
+    }
+    await api(`/api/runs/${encodeURIComponent(up.run.id)}/analyse`, { method: "POST", json: {
+      redact: $("#redact").checked, redact_terms: $("#terms").value, gap_minutes: +$("#gap").value || 5,
+      top_warnings: +$("#tw").value, top_errors: +$("#te").value, top_silences: +$("#ts").value } });
+    S.current = up.run.id; await loadRuns(up.run.id);
+  } catch (e) { say(e.message, true); go.disabled = false; }
+}
+
+/* ---------------------------------------------------------------- run view */
+async function openRun(id) {
+  S.current = id; S.compareResults = null;
+  document.querySelectorAll("nav.runs li button").forEach((b, i) => b.setAttribute("aria-current", String(S.runs[i] && S.runs[i].id === id)));
+  const meta = await api(`/api/runs/${encodeURIComponent(id)}`);
+  if (meta.job.state === "running" || meta.job.state === "new") return showRunning(meta);
+  S.results = await api(`/api/runs/${encodeURIComponent(id)}/results`);
+  renderRun();
+}
+
+function showRunning(meta) {
+  const steps = (meta.job.steps || []).map(s => `<li>${esc(s.step)}: ${s.exit === 0 ? "done" : "failed"}</li>`).join("");
+  $("#main").innerHTML = `<h2>${esc(meta.name)}</h2><p class="lead">${meta.job.state === "new" ? "Not analysed yet." : "Analysing. Large runs take a few seconds per 100 MB."}</p>
+    <ul>${steps}</ul>${meta.job.state === "new" ? "" : '<div class="progress"><div style="width:40%"></div></div>'}`;
+  if (meta.job.state === "running") setTimeout(async () => { if (S.current === meta.id) { await loadRuns(); openRun(meta.id); } }, 1200);
+}
+
+function renderRun() {
+  const R = S.results, m = R.meta;
+  if (m.job.state === "failed") {
+    const st = (m.job.steps || []).filter(s => s.exit !== 0).map(s => `<h3>${esc(s.step)}</h3><pre class="tb">${esc(s.stderr || s.stdout)}</pre>`).join("");
+    $("#main").innerHTML = `<h2>${esc(m.name)}</h2><div class="msg err">The analysis stopped with an error. The message from the script is below.</div>${st}`;
+    return;
+  }
+  const tabs = [["overview", "Overview"], ["errors", "Errors"], ["warnings", "Warnings"], ["explain", "Explanations"], ["compare", "Compare runs"], ["export", "Export"]];
+  $("#main").innerHTML = `<h2>${esc(m.name)}</h2>
+    <p class="lead">${esc(m.input)}${m.options && (m.options.redact || (m.options.redact_terms || []).length) ? " · reports masked" : ""}</p>
+    <div class="tabs" role="tablist">${tabs.map(([k, l]) => `<button role="tab" aria-selected="${S.tab === k}" data-tab="${k}">${l}</button>`).join("")}</div>
+    <div id="tab"></div>`;
+  document.querySelectorAll(".tabs button").forEach(b => b.onclick = () => { S.tab = b.dataset.tab; renderRun(); });
+  ({ overview: tabOverview, errors: tabErrors, warnings: tabWarnings, explain: tabExplain, compare: tabCompare, export: tabExport })[S.tab]();
+}
+
+/* ---- overview */
+function hours(sec) { return sec >= 86400 ? (sec / 86400).toFixed(1) + " d" : sec >= 3600 ? (sec / 3600).toFixed(1) + " h" : Math.round(sec / 60) + " min"; }
+function ts(s) { return s ? new Date(s.replace(" ", "T")) : null; }
+
+function tabOverview() {
+  const L = S.results.logs_analysis, T = S.results.tracebacks, el = $("#tab");
+  if (!L) { el.innerHTML = '<p class="empty">No timing report yet.</p>'; return; }
+  const st = L.run_status || {}, s = st.status || "Unknown";
+  let why = "";
+  if (s === "Completed") why = `The analysis returned 0 and no phase failed.`;
+  else if (s === "Failed") why = st.summary_failed ? `The execution summary says “${esc(st.summary.status)}”.` :
+      st.failed_phases ? `Failed phase: ${st.failed_phases.map(p => `<code>${esc(p)}</code>`).join(", ")}.` : `The analysis returned ${esc(st.return_value)}.`;
+  else if (s === "Did not finish") why = `No return value: the logs stop before the end of the run.${(st.last_tasks || []).length ? " Last tasks started: " + st.last_tasks.map(t => `<code>${esc(t)}</code>`).join(", then ") + "." : ""} Every figure below covers only what ran.`;
+  else why = esc(st.detail || "");
+  if (st.summary) why += ` CAST execution summary: <code>${esc(st.summary.status)}</code>.`;
+  const tot = L.total, sil = L.silent_seconds_total || 0, totS = tot ? tot.hours * 3600 : 0;
+  const tbs = T ? Object.values(T.per_file || {}).reduce((a, b) => a + b, 0) : null;
+  const pt = T ? T.problems.totals : {};
+  el.innerHTML = `
+    <div class="status ${statusClass(s)}"><span class="word">${esc(s)}</span><span class="why">${why}</span></div>
+    <div class="figures">
+      <div><b>${tot ? esc(tot.duration.replace(/^0d /, "")) : "—"}</b><span>from first to last log line</span></div>
+      <div><b>${totS ? Math.round(100 * sil / totS) + "%" : "—"}</b><span>silent (no log output)</span></div>
+      <div><b>${tbs == null ? "—" : tbs}</b><span>tracebacks</span></div>
+      <div><b>${(pt.ERROR || 0) + (pt.CRITICAL || 0) + (pt.FATAL || 0)}</b><span>error lines</span></div>
+      <div><b>${(pt.WARNING || 0).toLocaleString("en")}</b><span>warning lines</span></div>
+    </div>
+    <h3>Timeline</h3>
+    <div class="timeline" id="tl"></div>
+    <div class="legend"><span><i style="background:var(--steel)"></i>log writing</span><span><i style="background:url(#)" id="lgh"></i>silent stretch inside the log (hover for the last line before it)</span><span><i style="background:#c8913a"></i>run-wide silence</span></div>
+    <p class="note">A silence after a source file starts is processing time; after an external command or plugin starts, it is a wait.</p>
+    <h3>Phases</h3>
+    ${(st.phases || []).length ? `<div class="tablewrap"><table><thead><tr><th>Phase</th><th>Result</th><th>Log</th></tr></thead><tbody>${st.phases.map(p =>
+      `<tr><td><code>${esc(p.phase)}</code></td><td class="${p.result === "Failed" ? "bad" : p.result === "OK" ? "ok" : ""}">${p.result === "Failed" ? "Failed (" + esc(p.return_value) + ")" : p.result === "OK" ? "OK" : "not logged"}</td><td><code>${esc(p.log)}</code></td></tr>`).join("")}</tbody></table></div>
+      <p class="note">“Not logged” phases never write a return value; that is not a failure.</p>` : '<p class="note">No phase logs (0-&lt;phase&gt;.log) in this input.</p>'}
+    <h3>Environment</h3>
+    <table><tbody>${Object.entries(L.environment || {}).map(([k, v]) => `<tr><th style="position:static;width:220px">${esc(k)}</th><td>${v ? `<code>${esc(v)}</code>` : '<span class="note">absent</span>'}</td></tr>`).join("")}</tbody></table>
+    <details><summary>${Object.keys(L.extensions || {}).length} extensions</summary><table><thead><tr><th>Extension</th><th>Version</th></tr></thead><tbody>${Object.entries(L.extensions || {}).map(([k, v]) => `<tr><td><code>${esc(k)}</code></td><td><code>${esc(v)}</code></td></tr>`).join("")}</tbody></table></details>
+    ${(L.warnings || []).length ? `<h3>Notes from the analysis</h3><ul>${L.warnings.map(w => `<li>${esc(w)}</li>`).join("")}</ul>` : ""}`;
+  drawTimeline($("#tl"), L);
+}
+
+function drawTimeline(box, L) {
+  const rows = (L.timeline || []).filter(t => t.start && t.end);
+  if (!rows.length) { box.innerHTML = '<p class="note">No timestamped logs.</p>'; return; }
+  const t0 = Math.min(...rows.map(r => +ts(r.start))), t1 = Math.max(...rows.map(r => +ts(r.end)));
+  const labelW = 250, rowH = 17, top = 34, W = Math.max(720, box.clientWidth - 12), plotW = W - labelW - 16;
+  const H = top + rows.length * rowH + 8, span = Math.max(t1 - t0, 60000);
+  const x = t => labelW + (t - t0) / span * plotW;
+  const NS = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(NS, "svg"); svg.setAttribute("width", W); svg.setAttribute("height", H);
+  svg.setAttribute("role", "img"); svg.setAttribute("aria-label", "Timeline of the run's logs");
+  const mk = (tag, attrs, parent = svg) => { const e = document.createElementNS(NS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); parent.appendChild(e); return e; };
+  const defs = mk("defs", {}); const pat = mk("pattern", { id: "hatch", width: 5, height: 5, patternUnits: "userSpaceOnUse", patternTransform: "rotate(45)" }, defs);
+  mk("rect", { width: 5, height: 5, fill: "#dfe6ec" }, pat); mk("line", { x1: 0, y1: 0, x2: 0, y2: 5, stroke: "#8FA3B6", "stroke-width": 2 }, pat);
+  const steps = [3e5, 9e5, 18e5, 36e5, 72e5, 216e5, 432e5, 864e5, 1728e5]; const step = steps.find(s => span / s <= 9) || 1728e5;
+  for (let t = Math.ceil(t0 / step) * step; t <= t1; t += step) {
+    mk("line", { x1: x(t), x2: x(t), y1: top - 6, y2: H, stroke: "#C6D1DB" });
+    const d = new Date(t), lab = mk("text", { x: x(t) + 3, y: 12, "font-size": 11, fill: "#61758A" });
+    lab.textContent = step >= 864e5 || d.getHours() === 0 && d.getMinutes() === 0 ? d.toLocaleDateString("en-GB", { day: "2-digit", month: "short" }) + " " + d.toTimeString().slice(0, 5) : d.toTimeString().slice(0, 5);
+  }
+  for (const g of L.silent_periods || []) {
+    const r = mk("rect", { x: x(+ts(g.from)), y: 18, width: Math.max(1, x(+ts(g.to)) - x(+ts(g.from))), height: 8, fill: "#c8913a" });
+    mk("title", {}, r).textContent = `Run-wide silence ${hours(g.seconds)}: ${g.from} to ${g.to}\nLast line before: ${(g.before || "").slice(0, 160)}`;
+  }
+  const silences = {}; for (const g of L.per_log_silent_stretches || []) (silences[g.file] = silences[g.file] || []).push(g);
+  rows.forEach((r, i) => {
+    const y = top + i * rowH; const name = r.file.split(/[\\/]/).pop();
+    const lab = mk("text", { x: 4, y: y + 12, "font-size": 11.5, fill: "#1D2B38" }); lab.textContent = name.length > 38 ? name.slice(0, 37) + "…" : name;
+    mk("title", {}, lab).textContent = r.file;
+    const bar = mk("rect", { x: x(+ts(r.start)), y: y + 3, width: Math.max(2, x(+ts(r.end)) - x(+ts(r.start))), height: 11, fill: "#4D6A83", rx: 2 });
+    mk("title", {}, bar).textContent = `${r.file}\n${r.start} to ${r.end} (${r.duration})`;
+    for (const g of silences[r.file] || []) {
+      const sr = mk("rect", { x: x(+ts(g.from)), y: y + 3, width: Math.max(1, x(+ts(g.to)) - x(+ts(g.from))), height: 11, fill: "url(#hatch)" });
+      mk("title", {}, sr).textContent = `Silent ${hours(g.seconds)}: ${g.from} to ${g.to}\nLast line before: ${(g.before || "").replace(/\t0 ; 0.*$/, "").slice(-180)}`;
+    }
+  });
+  box.innerHTML = ""; box.appendChild(svg);
+  const lg = $("#lgh"); if (lg) lg.style.background = "repeating-linear-gradient(45deg,#dfe6ec 0 3px,#8FA3B6 3px 5px)";
+}
+
+/* ---- errors */
+function tabErrors() {
+  const T = S.results.tracebacks, trig = S.results.triggers || {}, el = $("#tab");
+  if (!T) { el.innerHTML = '<p class="empty">No error report yet.</p>'; return; }
+  if (!T.groups.length) { el.innerHTML = '<p class="empty">No Python tracebacks in this run. Errors without a traceback are in the Warnings tab.</p>'; return; }
+  el.innerHTML = `<p class="lead">${T.groups.length} error group${T.groups.length > 1 ? "s" : ""}, ${Object.values(T.per_file).reduce((a, b) => a + b, 0)} tracebacks. Groups share an exception type, a message pattern and a raise site.</p>` +
+    T.groups.map(g => {
+      const title = g.variant_count > 1 ? (g.pattern || g.label) : g.label, t = (trig[g.signature_id] || {}).trigger;
+      return `<div class="group"><h4>${esc(title)} <span class="note">· ${g.count} occurrence${g.count > 1 ? "s" : ""}</span>${g.interleaved_count ? '<span class="tag">interleaved threads</span>' : ""}</h4>
+      <dl class="kv"><dt>Extension</dt><dd><code>${esc(g.extension || "—")}</code></dd><dt>Block</dt><dd><code>${esc(g.block)}</code></dd>
+      <dt>Source</dt><dd><code>${esc(g.source)}</code></dd>${g.raised_code ? `<dt>Raised at</dt><dd><code>${esc(g.raised_code)}</code></dd>` : ""}
+      <dt>Error code</dt><dd>${esc(g.error_code || "—")}</dd><dt>Logs</dt><dd>${Object.entries(g.by_file).map(([f, c]) => `<code>${esc(f)}</code> (${c})`).join(", ")}</dd>
+      ${g.variant_count > 1 ? `<dt>Variants</dt><dd>${g.variant_count} distinct messages, e.g. ${g.message_variants.slice(0, 3).map(v => `<code>${esc(v)}</code>`).join("; ")}</dd>` : ""}</dl>
+      <div class="trigger">${t ? esc(t) : '<span class="note">No explanation yet. Write one in the Explanations tab.</span>'}</div>
+      <details><summary>First traceback (${esc(g.log)}, line ${g.line_no})</summary><pre class="tb">${esc(g.example_lines.join("\n"))}</pre></details></div>`;
+    }).join("");
+}
+
+/* ---- warnings */
+function mainLog(g) { const f = Object.keys(g.by_file || {}); return f.length ? f[0].split(/[\\/]/).pop() + (f.length > 1 ? " +" + (f.length - 1) : "") : "—"; }
+function tabWarnings() {
+  const T = S.results.tracebacks, el = $("#tab");
+  if (!T) { el.innerHTML = '<p class="empty">No warning report yet.</p>'; return; }
+  const P = T.problems, groups = P.groups;
+  el.innerHTML = `<p class="lead">${Object.entries(P.totals).map(([k, v]) => `${v.toLocaleString("en")} ${k.toLowerCase()} lines`).join(", ") || "No warnings or errors"} in ${groups.length} patterns. Check a pattern's log and sample values before drawing conclusions: many lines with few distinct values usually mean one repeated, harmless situation.</p>
+    <div class="filter"><input type="text" id="q" placeholder="Filter by text, log or source" aria-label="Filter patterns">
+      <label class="check" style="margin:0"><input type="checkbox" id="onlyBad"> Only errors and failure-like messages</label></div>
+    <div class="tablewrap"><table><thead><tr><th>Level</th><th>Log</th><th>Source</th><th>Code</th><th>Message pattern</th><th class="num">Count</th><th>Sample values</th></tr></thead><tbody id="wb"></tbody></table></div>`;
+  const draw = () => {
+    const q = $("#q").value.toLowerCase(), only = $("#onlyBad").checked;
+    $("#wb").innerHTML = groups.filter(g => {
+      const bad = g.level !== "WARNING" || FAILURE.test(g.template);
+      if (only && !bad) return false;
+      return !q || (g.template + " " + mainLog(g) + " " + g.source + " " + g.code).toLowerCase().includes(q);
+    }).map(g => { const bad = g.level !== "WARNING" || FAILURE.test(g.template);
+      return `<tr><td class="${g.level === "WARNING" ? "warn" : "bad"}">${esc(g.level)}</td><td><code>${esc(mainLog(g))}</code></td><td><code>${esc(g.source || "—")}</code></td><td><code>${esc(g.code || "—")}</code></td>
+      <td><code>${esc(g.template)}</code>${bad && g.level === "WARNING" ? '<span class="tag">mentions a failure</span>' : ""}</td><td class="num">${g.count.toLocaleString("en")}</td>
+      <td>${(g.values || []).slice(0, 4).map(v => `<code>${esc(v)}</code>`).join(", ") || "—"}</td></tr>`; }).join("") || '<tr><td colspan="7" class="note">No pattern matches.</td></tr>';
+  };
+  $("#q").oninput = draw; $("#onlyBad").onchange = draw; draw();
+}
+
+/* ---- explanations */
+function tabExplain() {
+  const T = S.results.tracebacks, trig = S.results.triggers || {}, el = $("#tab");
+  if (!T || !T.groups.length) { el.innerHTML = '<p class="empty">Nothing to explain: this run has no tracebacks.</p>'; return; }
+  el.innerHTML = `<p class="lead">For each error group, explain in one or two sentences what in the analysed source or the extension causes it. Base it on the message, the raising line and the context; start with “Likely inference:” when the logs don't show the cause directly. Saved explanations are kept for later runs of the same application.</p>` +
+    T.groups.map(g => `<div class="group"><h4>${esc(g.variant_count > 1 ? (g.pattern || g.label) : g.label)} <span class="note">· ${g.count}</span></h4>
+      <dl class="kv"><dt>Extension</dt><dd><code>${esc(g.extension || "—")}</code></dd>${g.raised_code ? `<dt>Raised at</dt><dd><code>${esc(g.raised_code)}</code></dd>` : ""}<dt>Block</dt><dd><code>${esc(g.block)}</code></dd></dl>
+      <details><summary>First traceback</summary><pre class="tb">${esc(g.example_lines.join("\n"))}</pre></details>
+      <label for="t-${esc(g.signature_id)}">Explanation</label><textarea id="t-${esc(g.signature_id)}" data-sig="${esc(g.signature_id)}">${esc((trig[g.signature_id] || {}).trigger || "")}</textarea></div>`).join("") +
+    `<div class="actions"><button class="btn" id="saveT">Save explanations</button><span class="note" id="tmsg"></span></div>`;
+  $("#saveT").onclick = async () => {
+    const upd = {}; document.querySelectorAll("textarea[data-sig]").forEach(t => upd[t.dataset.sig] = t.value);
+    $("#saveT").disabled = true; $("#tmsg").textContent = "Saving and updating the report…";
+    try { const r = await api(`/api/runs/${encodeURIComponent(S.current)}/triggers`, { method: "PUT", json: upd });
+      S.results = await api(`/api/runs/${encodeURIComponent(S.current)}/results`);
+      $("#tmsg").textContent = `Explanations saved. ${r.todo ? r.todo + " group(s) still without an explanation." : "Every group shown in the report is explained."}`;
+    } catch (e) { $("#tmsg").textContent = e.message; } finally { $("#saveT").disabled = false; }
+  };
+}
+
+/* ---- compare */
+const stepKey = f => f.split(/[\\/]/).pop().replace(/-?\d{8}-\d{6}/g, "").replace(/log\.log$/, ".log");
+function stepHours(L) { const o = {}; for (const t of L.timeline || []) if (t.start && t.end) o[stepKey(t.file)] = (+ts(t.end) - +ts(t.start)) / 36e5; return o; }
+async function tabCompare() {
+  const el = $("#tab"), others = S.runs.filter(r => r.id !== S.current && r.status);
+  if (!others.length) { el.innerHTML = '<p class="empty">Analyse a second run to compare it with this one, for example the same application a week earlier.</p>'; return; }
+  el.innerHTML = `<label for="cw">Compare with</label><select id="cw" style="padding:7px;min-width:320px">${others.map(r => `<option value="${esc(r.id)}" ${r.id === S.compareWith ? "selected" : ""}>${esc(r.name)} (${esc(r.created.slice(0, 10))})</option>`).join("")}</select><div id="cmp"></div>`;
+  $("#cw").onchange = () => { S.compareWith = $("#cw").value; S.compareResults = null; tabCompare(); };
+  S.compareWith = $("#cw").value;
+  if (!S.compareResults || S.compareResults.meta.id !== S.compareWith) S.compareResults = await api(`/api/runs/${encodeURIComponent(S.compareWith)}/results`);
+  const A = S.compareResults, B = S.results, ha = stepHours(A.logs_analysis || {}), hb = stepHours(B.logs_analysis || {});
+  const keys = [...new Set([...Object.keys(ha), ...Object.keys(hb)])].sort((a, b) => (parseInt(a) || 999) - (parseInt(b) || 999) || a.localeCompare(b));
+  const f = v => v == null ? "—" : v >= 1 ? v.toFixed(1) + " h" : Math.round(v * 60) + " min";
+  const pa = {}, pb = {}; for (const g of (A.tracebacks || {problems: {groups: []}}).problems.groups) pa[g.template] = g.count;
+  for (const g of (B.tracebacks || {problems: {groups: []}}).problems.groups) pb[g.template] = g.count;
+  const deltas = [...new Set([...Object.keys(pa), ...Object.keys(pb)])].map(k => [k, pa[k] || 0, pb[k] || 0]).filter(d => d[1] !== d[2]).sort((x, y) => Math.abs(y[2] - y[1]) - Math.abs(x[2] - x[1])).slice(0, 15);
+  const ea = new Map(((A.tracebacks || {}).groups || []).map(g => [g.pattern || g.label, g.count])), eb = new Map(((B.tracebacks || {}).groups || []).map(g => [g.pattern || g.label, g.count]));
+  const errs = [...new Set([...ea.keys(), ...eb.keys()])];
+  $("#cmp").innerHTML = `<h3>Status</h3><p>${esc(A.meta.name)}: <b>${esc((A.logs_analysis || {}).run_status ? A.logs_analysis.run_status.status : "—")}</b>. ${esc(B.meta.name)}: <b>${esc((B.logs_analysis || {}).run_status ? B.logs_analysis.run_status.status : "—")}</b>. If either did not finish, its later steps are missing below.</p>
+    <h3>Step durations</h3><div class="tablewrap"><table><thead><tr><th>Step</th><th class="num">${esc(A.meta.name)}</th><th class="num">${esc(B.meta.name)}</th><th class="num">Change</th></tr></thead><tbody>${keys.map(k => { const a = ha[k], b = hb[k], d = a != null && b != null ? b - a : null;
+      return `<tr><td><code>${esc(k)}</code></td><td class="num">${f(a)}</td><td class="num">${f(b)}</td><td class="num ${d != null && Math.abs(d) >= 0.5 ? (d > 0 ? "bad" : "ok") : ""}">${d == null ? "—" : (d > 0 ? "+" : "") + f(Math.abs(d)).replace(/^/, d < 0 ? "−" : "")}</td></tr>`; }).join("")}</tbody></table></div>
+    <h3>Error groups</h3>${errs.length ? `<table><thead><tr><th>Error</th><th class="num">${esc(A.meta.name)}</th><th class="num">${esc(B.meta.name)}</th></tr></thead><tbody>${errs.map(k => `<tr><td><code>${esc(k)}</code></td><td class="num">${ea.get(k) || "—"}</td><td class="num">${eb.get(k) || "—"}</td></tr>`).join("")}</tbody></table>` : '<p class="note">No tracebacks in either run.</p>'}
+    <h3>Largest changes in warning patterns</h3>${deltas.length ? `<table><thead><tr><th>Message pattern</th><th class="num">${esc(A.meta.name)}</th><th class="num">${esc(B.meta.name)}</th></tr></thead><tbody>${deltas.map(([k, a, b]) => `<tr><td><code>${esc(k)}</code></td><td class="num">${a.toLocaleString("en")}</td><td class="num">${b.toLocaleString("en")}</td></tr>`).join("")}</tbody></table>` : '<p class="note">Identical warning counts.</p>'}`;
+}
+
+/* ---- export */
+function tabExport() {
+  const m = S.results.meta, red = m.options && (m.options.redact || (m.options.redact_terms || []).length), id = encodeURIComponent(S.current);
+  const files = ["logs_analysis_report.md", "tracebacks_report.md", "logs_analysis.json", "tracebacks.json", "triggers.json"].concat(red ? ["triggers.shared.json"] : []);
+  $("#tab").innerHTML = `<div class="panel">
+    <h3 style="margin-top:0">For your own use</h3><p class="note">All reports and the working explanations file (triggers.json). Keep triggers.json: give it to the next analysis of this application and your explanations carry over.</p>
+    <div class="actions"><a class="btn" href="/api/runs/${id}/export">Download all reports</a></div>
+    <h3>To share outside the company</h3>
+    <p class="note">${red ? "The masked reports and triggers.shared.json, never the internal triggers.json." : "This run was analysed without masking. Add it again with masking on to produce a pack you can share."}</p>
+    <div class="actions"><a class="btn ${red ? "" : "secondary"}" ${red ? `href="/api/runs/${id}/export?shared=1"` : 'aria-disabled="true" style="pointer-events:none;opacity:.5"'}>Download the share pack</a></div>
+    <h3>Single files</h3><ul>${files.map(f => `<li><a href="/api/runs/${id}/file/${f}">${esc(f)}</a></li>`).join("")}</ul>
+    <h3>Remove</h3><div class="actions"><button class="btn secondary" id="del">Delete this run from the workspace</button></div></div>`;
+  $("#del").onclick = async () => { if (!confirm("Delete this run and its reports from the workspace? The original logs are not touched.")) return;
+    await api(`/api/runs/${id}`, { method: "DELETE" }); S.current = null; S.results = null; loadRuns(); };
+}
+
+$("#addRun").onclick = showAdd;
+loadRuns().catch(e => { $("#main").innerHTML = `<div class="msg err">${esc(e.message)}</div>`; });
+</script>
+</body>
+</html>
