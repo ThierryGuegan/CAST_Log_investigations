@@ -22,7 +22,7 @@ import threading
 import time
 import webbrowser
 import zipfile
-from datetime import datetime
+from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -118,12 +118,41 @@ def extract_archive(zip_path, input_dir, max_depth=3, max_bytes=20 * 1024 ** 3):
 
 
 # --------------------------------------------------------------------------- workspace
+def _force_remove(func, path, exc_info):
+    """rmtree error handler: Windows refuses to delete read-only files; clear the flag and retry."""
+    try:
+        os.chmod(path, 0o700)
+        func(path)
+    except OSError:
+        raise exc_info[1]
+
+
 class Workspace(object):
     def __init__(self, root, scripts):
         self.root = Path(root).resolve()
         self.root.mkdir(parents=True, exist_ok=True)
         self.logs_script, self.tb_script = scripts
         self.lock = threading.Lock()
+        self.meta_lock = threading.RLock()      # one reader or writer of a meta.json at a time
+        self._close_interrupted_runs()
+
+    def _close_interrupted_runs(self):
+        """A run still marked "running" when the server starts lost its analysis thread (the server
+        was stopped or crashed): mark it failed so it can be analysed again or deleted."""
+        for d in self.root.iterdir():
+            m = d / "meta.json"
+            if not m.is_file():
+                continue
+            try:
+                meta = json.loads(m.read_text(encoding="utf-8"))
+                if meta["job"].get("state") == "running":
+                    meta["job"].update(state="failed", finished=time.time())
+                    meta["job"].setdefault("steps", []).append(
+                        {"step": "Interrupted", "exit": 1, "stdout": "",
+                         "stderr": "The server stopped while this analysis was running. Analyse the run again."})
+                    self.save_meta(meta["id"], meta)
+            except (ValueError, KeyError, OSError):
+                continue
 
     def run_dir(self, run_id):
         if not RUN_ID_RE.match(run_id or ""):
@@ -134,15 +163,27 @@ class Workspace(object):
         return d
 
     def meta(self, run_id):
-        return json.loads((self.run_dir(run_id) / "meta.json").read_text(encoding="utf-8"))
+        path = self.run_dir(run_id) / "meta.json"
+        with self.meta_lock:
+            return json.loads(path.read_text(encoding="utf-8"))
 
     def save_meta(self, run_id, meta):
         d = self.root / run_id
         if not d.is_dir():                  # deleted meanwhile: never recreate it
             return
         tmp = d / "meta.json.tmp"
-        tmp.write_text(json.dumps(meta, indent=2), encoding="utf-8")
-        os.replace(str(tmp), str(d / "meta.json"))
+        with self.meta_lock:
+            tmp.write_text(json.dumps(meta, indent=2), encoding="utf-8")
+            # On Windows the replace fails with "access denied" while anything else (a browser poll,
+            # an antivirus scan, the indexer) has meta.json open for a moment: retry briefly.
+            for attempt in range(40):
+                try:
+                    os.replace(str(tmp), str(d / "meta.json"))
+                    return
+                except PermissionError:
+                    if attempt == 39:
+                        raise
+                    time.sleep(0.1)
 
     def new_run(self, name, input_path=None):
         base = re.sub(r"[^A-Za-z0-9_.\-]+", "_", name or "run").strip("._-")[:60] or "run"
@@ -164,7 +205,8 @@ class Workspace(object):
         for d in sorted(self.root.iterdir(), key=lambda p: p.name, reverse=True):
             m = d / "meta.json"
             if m.is_file():
-                meta = json.loads(m.read_text(encoding="utf-8"))
+                with self.meta_lock:
+                    meta = json.loads(m.read_text(encoding="utf-8"))
                 status = None
                 lj = d / "Output" / "logs_analysis.json"
                 if lj.is_file():
@@ -180,7 +222,29 @@ class Workspace(object):
         d = self.run_dir(run_id)
         if not force and self.meta(run_id)["job"].get("state") == "running":
             raise RuntimeError("This run is being analysed. Wait for the analysis to finish, then delete it.")
-        shutil.rmtree(str(d))
+        shutil.rmtree(str(d), onerror=_force_remove)
+
+    def clean(self, older_than_days, dry_run=False):
+        """Delete the runs created more than N days ago (0 = every run). A run being analysed is never
+        touched. Only the copies in the workspace are removed, never the user's own log folders."""
+        limit = datetime.now() - timedelta(days=older_than_days)
+        matched, deleted, failed = [], [], []
+        for r in self.list_runs():
+            try:
+                old = datetime.fromisoformat(r["created"]) < limit
+            except ValueError:
+                continue
+            if not old or r["state"] == "running":
+                continue
+            matched.append({"id": r["id"], "name": r["name"], "created": r["created"]})
+        if not dry_run:
+            for r in matched:
+                try:
+                    self.delete(r["id"])
+                    deleted.append(r["id"])
+                except (OSError, RuntimeError, KeyError) as e:
+                    failed.append({"id": r["id"], "error": str(e)})
+        return {"matched": matched, "deleted": deleted, "failed": failed}
 
     # ---- analysis
     def script_args(self, options):
@@ -205,6 +269,19 @@ class Workspace(object):
         threading.Thread(target=self._analyse, args=(run_id, options), daemon=True).start()
 
     def _analyse(self, run_id, options):
+        try:
+            self._analyse_steps(run_id, options)
+        except Exception as e:             # never leave a run "running" for ever
+            try:
+                meta = self.meta(run_id)
+                meta["job"].setdefault("steps", []).append(
+                    {"step": "Server error", "exit": 1, "stdout": "", "stderr": "{}: {}".format(type(e).__name__, e)})
+                meta["job"].update(state="failed", finished=time.time())
+                self.save_meta(run_id, meta)
+            except Exception:
+                pass
+
+    def _analyse_steps(self, run_id, options):
         d = self.root / run_id
         meta = self.meta(run_id)
         out = d / "Output"
@@ -386,6 +463,15 @@ class Handler(BaseHTTPRequestHandler):
                 meta = ws.new_run(body.get("name") or folder.name, input_path=folder)
                 runs = [str(p.relative_to(folder)) for p in logs if p.name == "0-analyze.log"]
                 return self._send(200, {"run": meta, "logs": len(logs), "runs_found": runs})
+            if parts == ["api", "runs", "clean"]:
+                body = self._json_body()
+                try:
+                    days = int(body.get("older_than_days"))
+                    if days < 0:
+                        raise ValueError
+                except (TypeError, ValueError):
+                    return self._error(400, "older_than_days must be a whole number of days, 0 or more.")
+                return self._send(200, ws.clean(days, dry_run=bool(body.get("dry_run"))))
             if len(parts) == 4 and parts[:2] == ["api", "runs"] and parts[3] == "analyse":
                 ws.analyse(parts[2], self._options(self._json_body()))
                 return self._send(202, {"state": "running"})

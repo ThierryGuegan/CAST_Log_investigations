@@ -112,6 +112,7 @@ details summary { cursor: pointer; color: var(--steel); font-size: 13.5px; margi
   <header><h1>CAST run inspector</h1><span class="sub">Local analysis of CAST deep-analysis logs. Nothing leaves this computer.</span></header>
   <nav class="runs" aria-label="Runs">
     <button class="add" id="addRun">Add a run</button>
+    <button class="btn secondary" id="cleanRuns" style="width:100%;margin-top:8px;padding:6px 12px;font-weight:500">Clean old runs</button>
     <ul id="runList"></ul>
   </nav>
   <main id="main"></main>
@@ -466,6 +467,38 @@ function tabWarnings() {
   draw();
 }
 
+/* ---- clean old runs */
+function showClean() {
+  S.current = null; S.results = null;
+  document.querySelectorAll("nav.runs li button").forEach(b => b.setAttribute("aria-current", "false"));
+  $("#main").innerHTML = `<h2>Clean old runs</h2>
+    <p class="lead">Removes the copies kept in the workspace (reports and unpacked archives) for runs older than the number of days below. Logs in folders you pointed to are never touched, and a run being analysed is skipped.</p>
+    <div class="row"><div><label for="days">Delete runs older than (days)</label><input type="number" id="days" min="0" value="30"></div></div>
+    <p class="note">0 deletes every run.</p>
+    <div class="actions"><button class="btn secondary" id="cprev">Preview</button> <button class="btn" id="cgo" disabled>Delete</button></div>
+    <div id="cres" style="margin-top:14px"></div>`;
+  const days = () => $("#days").value.trim();
+  const res = $("#cres");
+  const show = (html, err) => { res.innerHTML = `<div class="msg ${err ? "err" : ""}">${html}</div>`; };
+  $("#days").oninput = () => { $("#cgo").disabled = true; res.innerHTML = ""; };
+  $("#cprev").onclick = async () => {
+    try {
+      const r = await api("/api/runs/clean", { method: "POST", json: { older_than_days: days(), dry_run: true } });
+      $("#cgo").disabled = !r.matched.length;
+      show(r.matched.length ? `${r.matched.length} run${r.matched.length > 1 ? "s" : ""} would be deleted:<ul>${r.matched.map(m => `<li>${esc(m.name)} <span class="note">${esc(m.created.replace("T", " "))}</span></li>`).join("")}</ul>` : "No run matches.");
+    } catch (e) { show(esc(e.message), true); }
+  };
+  $("#cgo").onclick = async () => {
+    if (!confirm("Delete these runs and their reports from the workspace? The original logs are not touched.")) return;
+    try {
+      const r = await api("/api/runs/clean", { method: "POST", json: { older_than_days: days() } });
+      $("#cgo").disabled = true;
+      show(`${r.deleted.length} run${r.deleted.length === 1 ? "" : "s"} deleted.` + (r.failed.length ? ` ${r.failed.length} could not be deleted (a file may be open in another program):<ul>${r.failed.map(f => `<li>${esc(f.id)}: ${esc(f.error)}</li>`).join("")}</ul>` : ""), r.failed.length > 0);
+      loadRuns();
+    } catch (e) { show(esc(e.message), true); }
+  };
+}
+
 /* ---- explanations */
 function tabExplain() {
   const T = S.results.tracebacks, trig = S.results.triggers || {}, el = $("#tab");
@@ -529,6 +562,7 @@ function tabExport() {
 }
 
 $("#addRun").onclick = showAdd;
+$("#cleanRuns").onclick = showClean;
 loadRuns().catch(e => { $("#main").innerHTML = `<div class="msg err">${esc(e.message)}</div>`; });
 </script>
 </body>
