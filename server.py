@@ -415,7 +415,7 @@ class Handler(BaseHTTPRequestHandler):
         ws = self.server.ws
         try:
             if not parts:
-                return self._send(200, (HERE / "index.html").read_bytes(), "text/html; charset=utf-8")
+                return self._send(200, (HERE / "cast_run_inspector.html").read_bytes(), "text/html; charset=utf-8")
             if parts == ["api", "limits"]:          # lets the page refuse an archive that is too big before uploading it
                 return self._send(200, {"max_upload": self.server.max_upload, "max_extract": self.server.max_extract})
             if parts == ["api", "runs"]:
