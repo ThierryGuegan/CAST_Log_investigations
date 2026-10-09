@@ -8,7 +8,7 @@ Guidance for Claude Code when working in this repository.
 
 - `skills/analyze-logs/`: timing, run status, environment (CARL/CAIP, LISA/LTSA, KB schema), extensions. Script: `scripts/analyze_logs.py`.
 - `skills/analyze-tracebacks/`: Python tracebacks grouped by exception + message + raise site, plus WARNING/ERROR patterns and `triggers.json` explanations. Script: `scripts/analyze_tracebacks.py`.
-- `server.py` + `cast_run_inspector.html`: a local web GUI. It **analyses nothing**: it runs the two skill scripts and displays the JSON they write.
+- `server.py` + `cast_log_inspector.html`: a local web GUI. It **analyses nothing**: it runs the two skill scripts and displays the JSON they write.
 
 The two skills are also used as Claude skills (claude.ai, `~/.claude/skills`), so each `SKILL.md` is a user-facing contract, not just documentation.
 
@@ -32,8 +32,8 @@ Run **all three** test suites before every commit. They must all pass.
 - Logs can be huge (multi-GB), UTF-16, one-line, out of order, with dates inside messages. Stream files; never load a whole log into memory.
 
 ### Where logic lives
-- All parsing and analysis logic belongs in the **skill scripts**, never in `server.py` or `cast_run_inspector.html`. A fix made in the GUI would not reach the skills or their tests.
-- The server and the scripts communicate only through the output files (`OUTPUT_FILES` in `server.py`) and their JSON structure. If you change a JSON field or a file name, update the server, `cast_run_inspector.html` and the tests together.
+- All parsing and analysis logic belongs in the **skill scripts**, never in `server.py` or `cast_log_inspector.html`. A fix made in the GUI would not reach the skills or their tests.
+- The server and the scripts communicate only through the output files (`OUTPUT_FILES` in `server.py`) and their JSON structure. If you change a JSON field or a file name, update the server, `cast_log_inspector.html` and the tests together.
 - Exit code **2** means "refused, nothing written" (missing input, output inside input, unreadable triggers file). Keep this contract.
 
 ### Security and privacy (non-negotiable)
@@ -42,7 +42,7 @@ Run **all three** test suites before every commit. They must all pass.
 - Never paste or quote raw log lines (in code comments, test fixtures, commit messages, answers). Use the reports or pipe through `--mask`. Test fixtures use invented values only.
 - **Never commit real customer logs**, reports or `workspace/` content (it is in `.gitignore`).
 - Server: listens on `127.0.0.1` only; writing requests require the `X-CAST-GUI` header; requests for other host names are refused. Keep all three.
-- `cast_run_inspector.html` loads **nothing from the internet** (no CDN, fonts or scripts). Every value coming from logs is inserted as text (`textContent`), never as HTML.
+- `cast_log_inspector.html` loads **nothing from the internet** (no CDN, fonts or scripts). Every value coming from logs is inserted as text (`textContent`), never as HTML.
 - Archive extraction refuses entries that escape their folder (zip-slip check). Per-phase zips (CAST 8.3 / AIP Console) are extracted into one folder per phase, never merged.
 - Files given by the user (log folders, uploaded `triggers.json`) are **read only**. Deleting a run only removes its copy in the workspace.
 - `triggers.json` is internal: the share pack contains only `triggers.shared.json` and masked reports.
