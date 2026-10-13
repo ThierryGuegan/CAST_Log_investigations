@@ -39,7 +39,7 @@ This skill covers the warnings of the C/C++ analyzer only. For a general request
    - `--top N` sets how many rows each table shows (default 15).
    - `--redact` masks IPs, host names and non-CAST paths; `--redact-term TEXT` masks a customer or project name and can be repeated. Use these when the report will leave the company. Credentials are always masked, as lines are read, whatever the options.
 
-2. **Read the verdict and the findings.** They are in order of impact. If the report says **the run did not finish**, say so first: the log ends before the last source file, so every count covers only the part that ran, and the log never says why it stopped (cancellation, time limit, crash). Do not guess a cause; point to the analyze-logs report and the job history.
+2. **Read the verdict and the findings.** They are in order of impact. If the report says **the run probably did not finish**, say so first: the log ends before the last source file, so every count covers only the part that ran, and the log never says why it stopped (cancellation, time limit, crash). "Probably" because the log cannot show whether the analyzer skips some of the N items on purpose; the analyze-logs run status settles it. Do not guess a cause; point to the analyze-logs report and the job history.
 
 3. **Answer the user**, with this shape. Keep the report out of the chat unless asked.
    - The scale: lines, warnings and their share of the log, whether the run finished.

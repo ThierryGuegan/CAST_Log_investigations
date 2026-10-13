@@ -389,7 +389,7 @@ function tabCpp() {
   const kinds = { sdk: "Third-party SDK", other: "Not recognised (project or third-party)", platform: "Platform SDK", system: "System (C / POSIX / C++)" };
   const mh = C.missing_headers, ui = C.unknown_identifiers, amb = C.ambiguous_includes, td = C.typedef_redefinitions, sf = C.source_files;
   el.innerHTML = `
-    ${stopped.length ? `<div class="msg err"><b>The run did not finish.</b> <code>${esc(stopped[0].file)}</code> ends after source file ${nfmt(stopped[0].files_parsed)} of ${nfmt(stopped[0].files_total)} (${esc(stopped[0].last)}). Every count below covers only the part that ran; the log does not say why it stopped.</div>` : ""}
+    ${stopped.length ? `<div class="msg err"><b>The run probably did not finish.</b> <code>${esc(stopped[0].file)}</code> ends after source file ${nfmt(stopped[0].files_parsed)} of ${nfmt(stopped[0].files_total)} (${esc(stopped[0].last)}). Every count below covers only the part that ran; the log does not say why it stopped.</div>` : ""}
     <div class="figures">
       <div><b>${nfmt(T.warnings)}</b><span>warning lines (${share}% of the log)</span></div>
       <div><b>${nfmt(mh.warnings)}</b><span>missing-header warnings (${nfmt(mh.distinct)} headers)</span></div>

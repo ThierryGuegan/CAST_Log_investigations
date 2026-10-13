@@ -369,7 +369,7 @@ def canonical(line):
 
 
 TS_LEN = 24                                         # "YYYY-MM-DD HH:MM:SS.mmm " (a masking regex never spans it)
-MASK_CACHE_MAX = 150000
+MASK_CACHE_MAX = 100000                             # entries; keys are capped below, so about 100 MB at most
 
 
 def masked_line(line, cache):
@@ -382,8 +382,8 @@ def masked_line(line, cache):
     tail = cache.get(key)
     if tail is None:
         tail = mask_line(line)[TS_LEN:]
-        if len(cache) < MASK_CACHE_MAX and len(key) < 2000:
-            cache[key] = tail
+        if len(cache) < MASK_CACHE_MAX and len(key) < 1000:
+            cache[key] = key if tail == key else tail      # nothing masked (the usual case): store one string, not two
     return line[:TS_LEN] + tail
 
 
@@ -481,7 +481,7 @@ def _bump_file(c, fpath, unit):
             return
         slot = c.files[fpath] = [0, set()]
     slot[0] += 1
-    if len(slot[1]) < 20000:
+    if unit >= 0 and len(slot[1]) < 20000:          # a warning before the first source file belongs to none
         slot[1].add(unit)
 
 
@@ -503,7 +503,8 @@ def parse_log(path, rel, c):
         info["size"] = path.stat().st_size
     except OSError:
         pass
-    unit = -1                                       # index of the source file being parsed
+    unit = -1                                       # global index of the source file being parsed (-1: none yet)
+    first_unit = len(c.units)                       # several logs share c.units: this log starts here
     first_ts = last_ts = None
     for raw in read_lines(path):
         info["lines"] += 1
@@ -525,10 +526,10 @@ def parse_log(path, rel, c):
             if msg.startswith("Parsing file"):
                 mp = PARSING_RE.match(msg)
                 if mp:
-                    unit += 1
+                    unit = len(c.units)
                     info["progress"], info["total"] = int(mp.group(1)), int(mp.group(2))
                     info["cpp_signals"] += 1
-                    c.units.append([unit, mp.group(3), parse_ts(ts), 0])
+                    c.units.append([unit, mp.group(3), parse_ts(ts), 0, None])
             elif msg.startswith("Skipping illegal redefinition"):
                 mt = TYPEDEF_RE.match(msg)
                 mf = FILEPOS_RE.search(msg)
@@ -595,7 +596,7 @@ def parse_log(path, rel, c):
                     slot[1][includer] = slot[1].get(includer, 0) + 1
                 if includer:
                     _bump_file(c, includer, unit)
-                if c.units and unit >= 0:
+                if unit >= 0:
                     c.units[unit][3] += 1
                 c.tags[("WARNING", "Preprocessor")] += 1
                 continue
@@ -622,6 +623,8 @@ def parse_log(path, rel, c):
         if unit >= 0:
             c.units[unit][3] += 1
     info["first"], info["last"] = parse_ts(first_ts) if first_ts else None, parse_ts(last_ts) if last_ts else None
+    for k in range(first_unit, len(c.units)):       # a source file ends where the next one of the SAME log starts
+        c.units[k][4] = c.units[k + 1][2] if k + 1 < len(c.units) else info["last"]
     return info
 
 
@@ -638,7 +641,7 @@ def analyze(input_dir, out_dir):
 
 # --------------------------------------------------------------------------- results
 def module_of(path, root):
-    """First folder under the analysed root ("source/manual/EQT_DDS_MFD/..." -> eqt_dds_mfd)."""
+    """First folder under the analysed root ("<root>/modA/src/x.h" -> moda)."""
     p = path.replace("\\", "/").lower()
     r = root.replace("\\", "/").lower().rstrip("/")
     if r and p.startswith(r + "/"):
@@ -713,10 +716,8 @@ def build_data(c, infos, cpp_logs, scanned, top):
 
     # ---- source files (parsing units): most warnings, longest parse
     units = []
-    for k, u in enumerate(c.units):
-        nxt = c.units[k + 1][2] if k + 1 < len(c.units) else None
-        end = nxt or (cpp_logs[-1]["last"] if cpp_logs else None)
-        dur = seconds(u[2], end) if (u[2] and end and end >= u[2]) else None
+    for u in c.units:
+        dur = seconds(u[2], u[4]) if (u[2] and u[4] and u[4] >= u[2]) else None
         units.append({"index": u[0] + 1, "file": u[1], "warnings": u[3], "seconds": dur})
     heavy_units = sorted(units, key=lambda r: (-r["warnings"], r["index"]))[:top]
     slow_units = sorted([u for u in units if u["seconds"] is not None], key=lambda r: (-r["seconds"], r["index"]))[:top]
@@ -907,10 +908,11 @@ def build_findings(d):
     for l in unfinished:
         out.append({"id": "run-incomplete", "severity": "high",
                     "title": "The log stops before the last source file",
-                    "evidence": ["`{}` ends at {} after source file {} of {}: the run did not finish.".format(
+                    "evidence": ["`{}` ends at {} after source file {} of {}: the run probably did not finish.".format(
                         l["file"], l["last"], n(l["files_parsed"]), n(l["files_total"])),
                         "The log gives no reason for the stop (cancellation, timeout, crash or machine problem); "
-                        "check the analyze-logs report and the job history."],
+                        "check the analyze-logs report and the job history. The log cannot show whether the analyzer "
+                        "skips some of the items on purpose."],
                     "recommendation": "Fix the causes above, then rerun. If it stops again, look for a time limit or an "
                                       "operator action on the step."})
     if warn and tot["lines"] and warn >= 0.5 * tot["lines"] and tot["all_bytes"]:
@@ -976,7 +978,7 @@ def build_report(d, top):
     unfinished = [l for l in d["logs"] if l["files_total"] and not l["all_files_reached"]]
     if unfinished:
         l = unfinished[0]
-        out += ["> ⚠ **The run did not finish**: the log ends after source file {} of {} ({}). Every count below "
+        out += ["> ⚠ **The run probably did not finish**: the log ends after source file {} of {} ({}). Every count below "
                 "covers only the part that ran.".format(n(l["files_parsed"]), n(l["files_total"]), l["last"]), ""]
     out.append("{} lines: **{} WARNING**, {} INFO, {} ERROR ({} of the lines and {} of the size are warnings).".format(
         n(tot["lines"]), n(tot["warnings"]), n(tot["info"]), n(tot["errors"]),
@@ -1173,7 +1175,7 @@ def main():
         len(cpp_logs), scanned, n(t["lines"]), n(t["warnings"]), n(t["errors"]), len(data["findings"])))
     for l in data["logs"]:
         if l["files_total"] and not l["all_files_reached"]:
-            print("WARNING: {} ends after source file {} of {}: the run did not finish.".format(
+            print("WARNING: {} ends after source file {} of {}: the run probably did not finish.".format(
                 l["file"], l["files_parsed"], l["files_total"]), file=sys.stderr)
     return 0
 

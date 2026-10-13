@@ -163,6 +163,31 @@ class Counting(unittest.TestCase):
         self.assertIn("Cannot open database", report)
 
 
+class SeveralLogs(unittest.TestCase):
+    """Audit: unit indexes were per log but used against one shared list, so a second C/C++ log
+    was counted against the first one's source files, and a duration spanned the gap between logs."""
+
+    def test_second_log_is_not_counted_against_the_first(self):
+        second = build_log(1).replace("2026-03-01 10:", "2026-03-02 11:")
+        data, _, _, _ = run({"a.log": build_log(3), "b.log": second})
+        self.assertEqual(data["source_files"]["parsed"], 4)
+        by_warn = sorted(u["warnings"] for u in data["source_files"]["most_warnings"])
+        self.assertEqual(by_warn, [12, 12, 12, 12])                        # not 24 on the first file
+        gen = next(r for r in data["files"]["rows"] if r["file"].endswith("gen/topics.h"))
+        self.assertEqual(gen["source_files"], 4)
+
+    def test_duration_never_spans_two_logs(self):
+        second = build_log(1).replace("2026-03-01 10:", "2026-03-02 11:")
+        data, _, _, _ = run({"a.log": build_log(3), "b.log": second})
+        self.assertLess(max(u["seconds"] for u in data["source_files"]["slowest"]), 60)
+
+    def test_warning_before_the_first_source_file_belongs_to_none(self):
+        early = "2026-03-01 10:00:00.100 [WARNING] Preprocessor cannot find file 'stdio.h'. (file /s/early.h, line 1)\n"
+        data, _, _, _ = run({"a.log": early + build_log(1)})
+        row = next(r for r in data["files"]["rows"] if r["file"] == "/s/early.h")
+        self.assertEqual((row["warnings"], row["source_files"]), (1, 0))
+
+
 class Findings(unittest.TestCase):
     def test_root_causes_found(self):
         data, report, _, _ = run({"4-cpp.log": build_log(3)})
@@ -310,6 +335,10 @@ class Masking(unittest.TestCase):
         short = "2026-03-01 10:00:00 [INFO] password=" + self.SECRET   # no milliseconds: no memo, still masked
         self.assertNotIn(self.SECRET, m.masked_line(short, cache))
         self.assertEqual(len(cache), 1)
+        plain = "2026-03-01 10:00:00.100 [INFO] nothing to mask here"
+        m.masked_line(plain, cache)
+        key = plain[m.TS_LEN:]
+        self.assertIs(cache[key], next(k for k in cache if k == key))      # one string stored, not two
 
     def test_redact_masks_paths_and_keeps_json_valid(self):
         data, report, out, _ = run({"a.log": build_log(2)}, "--redact", "--redact-term", "app1")
