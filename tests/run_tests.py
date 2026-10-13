@@ -384,6 +384,80 @@ class AddRunChecks(unittest.TestCase):
         self.assertEqual(cm.exception.code, 403)
 
 
+class CppSkill(unittest.TestCase):
+    """analyze-cpp-warnings is the third analysis step; it only shows up for C/C++ analyzer logs."""
+
+    @staticmethod
+    def cpp_log(units=2, total=None):
+        total = total or units
+        lines = ["2026-03-01 10:00:00.100 [INFO] +root path:/data/acme/src",
+                 "2026-03-01 10:00:01.100 [INFO] Compiling source files ({} items)...".format(total)]
+        for k in range(1, units + 1):
+            lines.append("2026-03-01 10:00:{:02d}.100 [INFO] Parsing file ({}/{}) /data/acme/src/m/f{}.c...".format(k + 1, k, total, k))
+            lines.append("2026-03-01 10:00:{:02d}.200 [WARNING] Preprocessor cannot find file 'stdio.h'. "
+                         "(file /data/acme/src/m/gen.h, line 3)".format(k + 1))
+            lines.append("2026-03-01 10:00:{:02d}.300 [WARNING] [Parser] SDK_BOOL: Ignored token 'SDK_BOOL'. "
+                         "[file '/data/acme/src/m/gen.h'(5,7)]\t/data/acme/src/m/gen.h".format(k + 1))
+        return "\n".join(lines) + "\n"
+
+    def test_cpp_run_gets_results_files_and_export(self):
+        _, body = upload(zip_bytes({"analyze/4-cpp.log": self.cpp_log(2, total=5)}), run_name="cpp-run")
+        rid = body["run"]["id"]
+        meta = analyse(rid)
+        self.assertEqual(meta["job"]["state"], "done", meta["job"])
+        self.assertEqual([s["step"] for s in meta["job"]["steps"]],
+                         ["Timing and environment", "Errors and warnings", "C/C++ warnings"])
+        self.assertFalse(meta["job"]["steps"][-1].get("skipped"))
+        code, res = req("GET", "/api/runs/{}/results".format(rid))
+        cw = res["cpp_warnings"]
+        self.assertEqual(cw["totals"]["warnings"], 4)
+        self.assertFalse(cw["logs"][0]["all_files_reached"])                       # 2 of 5: shown as unfinished
+        self.assertIn("missing-system-headers", [f["id"] for f in cw["findings"]])
+        code, md = req("GET", "/api/runs/{}/file/cpp_warnings_report.md".format(rid), raw=True)
+        self.assertEqual(code, 200)
+        self.assertIn(b"did not finish", md)
+        code, data = req("GET", "/api/runs/{}/export".format(rid), raw=True)
+        names = zipfile.ZipFile(io.BytesIO(data)).namelist()
+        for n in ("cpp_warnings_report.md", "cpp_warnings.json"):
+            self.assertIn("{}/{}".format(rid, n), names)
+
+    def test_run_without_cpp_logs_skips_the_step_and_does_not_fail(self):
+        _, body = upload(phase_zip_archive(), run_name="no-cpp")
+        rid = body["run"]["id"]
+        out = SRV.ws.run_dir(rid) / "Output"
+        out.mkdir(exist_ok=True)
+        (out / "cpp_warnings.json").write_text("{}", encoding="utf-8")          # left by an earlier analysis
+        meta = analyse(rid)
+        self.assertEqual(meta["job"]["state"], "done", meta["job"])
+        step = meta["job"]["steps"][-1]
+        self.assertEqual((step["step"], step["exit"], step.get("skipped")), ("C/C++ warnings", 0, True))
+        code, res = req("GET", "/api/runs/{}/results".format(rid))
+        self.assertIsNone(res["cpp_warnings"])
+        self.assertFalse((out / "cpp_warnings.json").exists())
+        code, data = req("GET", "/api/runs/{}/export".format(rid), raw=True)
+        self.assertFalse([n for n in zipfile.ZipFile(io.BytesIO(data)).namelist() if "cpp_warnings" in n])
+
+    def test_masking_options_reach_the_cpp_step(self):
+        _, body = upload(zip_bytes({"4-cpp.log": self.cpp_log(1)}), run_name="cpp-masked")
+        rid = body["run"]["id"]
+        meta = analyse(rid, redact=True, redact_terms=["acme"])
+        self.assertEqual(meta["job"]["state"], "done", meta["job"])
+        out = SRV.ws.run_dir(rid) / "Output"
+        text = (out / "cpp_warnings.json").read_text(encoding="utf-8") + (out / "cpp_warnings_report.md").read_text(encoding="utf-8")
+        self.assertNotIn("acme", text.lower())
+        self.assertIn("gen.h", text)
+
+    def test_older_skills_folder_without_the_cpp_skill_still_works(self):
+        skills = Path(TMP) / "old-skills"
+        for name in ("analyze-logs", "analyze-tracebacks"):
+            shutil.copytree(str(HERE / "skills" / name), str(skills / name), ignore=shutil.ignore_patterns("tests", "__pycache__"))
+        scripts = server.find_scripts(skills)
+        self.assertIsNone(scripts[2])
+        ws = server.Workspace(Path(TMP) / "ws-old", scripts)
+        self.assertIsNone(ws.cpp_script)
+        self.assertEqual(server.find_scripts(None)[2].name, "analyze_cpp_warnings.py")
+
+
 class GuiPage(unittest.TestCase):
     def test_every_function_the_page_calls_is_defined(self):
         """A refactor once deleted uploadZip(), which silently broke every zip upload."""
@@ -394,6 +468,7 @@ class GuiPage(unittest.TestCase):
         defined |= set(re.findall(r"(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=", script))
         called = set(re.findall(r"(?<![.\w])(upload\w*|start\w*|show\w*|tab\w*|load\w*|open\w*|render\w*|read\w*|remember\w*|clean\w*)\(", script))
         self.assertEqual(sorted(c for c in called if c not in defined), [])
+        self.assertIn("function tabCpp", script)                                  # the C/C++ tab exists
 
 
 class Security(unittest.TestCase):
