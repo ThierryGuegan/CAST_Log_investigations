@@ -4,6 +4,8 @@ A local web interface for the **analyze-logs** and **analyze-tracebacks** skills
 
 The interface itself analyses nothing. It runs the two skill scripts and displays the JSON they write, so the results are exactly the skills' results.
 
+A third skill, **analyze-cpp-warnings**, explains the warnings of C / C++ analyzer logs (missing headers, unknown macros, include paths). It is used from Claude or the command line (`python3 skills/analyze-cpp-warnings/scripts/analyze_cpp_warnings.py --input DIR --output DIR`); the interface does not run it yet.
+
 ## Start
 
 You need Python 3.8 or later; nothing else is installed.
@@ -55,4 +57,5 @@ Replace the two folders in `skills/` with the new versions; the interface needs 
 python3 tests/run_tests.py                              # the interface
 python3 skills/analyze-logs/tests/run_tests.py          # the skills
 python3 skills/analyze-tracebacks/tests/run_tests.py
+python3 skills/analyze-cpp-warnings/tests/run_tests.py
 ```
