@@ -1,10 +1,10 @@
 # CAST run inspector
 
-A local web interface for the **analyze-logs** and **analyze-tracebacks** skills. Drop the zip of a CAST run's logs, or point to a folder. The inspector runs both analyses and shows the results: run status, timeline, errors, warnings, explanations, comparison between runs, and export.
+A local web interface for the **analyze-logs**, **analyze-tracebacks** and **analyze-cpp-warnings** skills. Drop the zip of a CAST run's logs, or point to a folder. The inspector runs the analyses and shows the results: run status, timeline, errors, warnings, explanations, C/C++ warnings, comparison between runs, and export.
 
-The interface itself analyses nothing. It runs the two skill scripts and displays the JSON they write, so the results are exactly the skills' results.
+The interface itself analyses nothing. It runs the skill scripts and displays the JSON they write, so the results are exactly the skills' results.
 
-A third skill, **analyze-cpp-warnings**, explains the warnings of C / C++ analyzer logs (missing headers, unknown macros, include paths). It is used from Claude or the command line (`python3 skills/analyze-cpp-warnings/scripts/analyze_cpp_warnings.py --input DIR --output DIR`); the interface does not run it yet.
+The **C/C++** tab appears for runs that contain C/C++ analyzer logs (millions of `Preprocessor` / `[Parser]` warnings): it lists the root causes (missing headers, unknown macros, include paths), each with its evidence and a recommendation. For other runs the third analysis step is skipped without error. If your `skills/` folder has no `analyze-cpp-warnings/`, the interface still works without that tab.
 
 ## Start
 
@@ -21,7 +21,7 @@ The browser opens at `http://127.0.0.1:8765/`. Stop the server with Ctrl+C.
 Options:
 - `--port 8765`: another port.
 - `--workspace DIR`: where runs and reports are kept (default: `./workspace`).
-- `--skills-dir DIR`: use other copies of the skills. This is the folder that contains `analyze-logs/` and `analyze-tracebacks/`; by default, the copies in `./skills` are used.
+- `--skills-dir DIR`: use other copies of the skills. This is the folder that contains `analyze-logs/`, `analyze-tracebacks/` and `analyze-cpp-warnings/`; by default, the copies in `./skills` are used.
 - `--max-upload-gb 4`: the largest archive accepted.
 - `--max-extract-gb 20`: the largest total size an archive may unpack to, nested zips included. This guards against archives that expand to fill the disk.
 - `--no-browser`: don't open the browser.
@@ -51,7 +51,7 @@ Options:
 
 ## Updating the skills
 
-Replace the two folders in `skills/` with the new versions; the interface needs no change. Check with:
+Replace the folders in `skills/` with the new versions; the interface needs no change. Check with:
 
 ```bash
 python3 tests/run_tests.py                              # the interface

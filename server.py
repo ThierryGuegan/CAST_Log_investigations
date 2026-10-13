@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""CAST run inspector: a local web GUI for the analyze-logs and analyze-tracebacks skills.
+"""CAST run inspector: a local web GUI for the analyze-logs, analyze-tracebacks and analyze-cpp-warnings skills.
 
-The GUI never analyses anything itself: it runs the two skill scripts and displays the JSON
+The GUI never analyses anything itself: it runs the skill scripts and displays the JSON
 they write, so every fix to the scripts reaches the GUI and their tests keep covering the logic.
 
 Standard library only, Python 3.8+. Listens on 127.0.0.1 only.
@@ -28,22 +28,27 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 RUN_ID_RE = re.compile(r"^[A-Za-z0-9_.\-]{1,100}$")
-OUTPUT_FILES = ("logs_analysis_report.md", "tracebacks_report.md", "logs_analysis.json", "tracebacks.json",
-                "triggers.json", "triggers.shared.json")
+OUTPUT_FILES = ("logs_analysis_report.md", "tracebacks_report.md", "cpp_warnings_report.md", "logs_analysis.json",
+                "tracebacks.json", "cpp_warnings.json", "triggers.json", "triggers.shared.json")
+CPP_OUTPUTS = ("cpp_warnings_report.md", "cpp_warnings.json")
+CPP_STEP = "C/C++ warnings"
+NO_CPP_MESSAGE = "No C/C++ analyzer log"          # what analyze_cpp_warnings.py says on exit 2
 INTERNAL_ONLY = ("triggers.json", "triggers.json.bak")
 CHUNK = 1024 * 1024
 
 
 # --------------------------------------------------------------------------- skill scripts
 def find_scripts(skills_dir=None):
-    """The two skill scripts: --skills-dir, else ./skills next to this file, else installed skills."""
+    """(analyze_logs, analyze_tracebacks, analyze_cpp_warnings or None): --skills-dir, else ./skills next
+    to this file, else installed skills. The C/C++ skill is optional, so an older skills folder still works."""
     bases = [Path(skills_dir)] if skills_dir else [
         HERE / "skills", HERE.parent, Path.home() / ".claude" / "skills", Path("/mnt/skills/user")]
     for base in bases:
         logs = base / "analyze-logs" / "scripts" / "analyze_logs.py"
         tbs = base / "analyze-tracebacks" / "scripts" / "analyze_tracebacks.py"
+        cpp = base / "analyze-cpp-warnings" / "scripts" / "analyze_cpp_warnings.py"
         if logs.is_file() and tbs.is_file():
-            return logs, tbs
+            return logs, tbs, (cpp if cpp.is_file() else None)
     raise SystemExit("The skill scripts were not found. Pass --skills-dir pointing to the folder that "
                      "contains analyze-logs/ and analyze-tracebacks/.")
 
@@ -131,7 +136,8 @@ class Workspace(object):
     def __init__(self, root, scripts):
         self.root = Path(root).resolve()
         self.root.mkdir(parents=True, exist_ok=True)
-        self.logs_script, self.tb_script = scripts
+        self.logs_script, self.tb_script = scripts[:2]
+        self.cpp_script = scripts[2] if len(scripts) > 2 else None
         self.lock = threading.Lock()
         self.meta_lock = threading.RLock()      # one reader or writer of a meta.json at a time
         self._close_interrupted_runs()
@@ -295,14 +301,23 @@ class Workspace(object):
         imported = d / "import_triggers.json"
         if imported.is_file():
             tb_cmd += ["--triggers", str(imported)]
+        steps = [("Timing and environment", logs_cmd), ("Errors and warnings", tb_cmd)]
+        if self.cpp_script:
+            steps.append((CPP_STEP, [sys.executable, str(self.cpp_script), "--input", meta["input"],
+                                     "--output", str(out)] + common))
         state = "done"
-        for label, cmd in (("Timing and environment", logs_cmd), ("Errors and warnings", tb_cmd)):
+        for label, cmd in steps:
             p = subprocess.run(cmd, capture_output=True, env=dict(os.environ, PYTHONIOENCODING="utf-8"))
-            meta["job"]["steps"].append({"step": label, "exit": p.returncode,
-                                         "stdout": p.stdout.decode("utf-8", "replace")[-4000:],
-                                         "stderr": p.stderr.decode("utf-8", "replace")[-8000:]})
+            step = {"step": label, "exit": p.returncode, "stdout": p.stdout.decode("utf-8", "replace")[-4000:],
+                    "stderr": p.stderr.decode("utf-8", "replace")[-8000:]}
+            if label == CPP_STEP and p.returncode == 2 and NO_CPP_MESSAGE in step["stderr"]:
+                step.update(exit=0, skipped=True)   # not a C/C++ run: nothing to show, nothing failed
+                for name in CPP_OUTPUTS:            # left by an earlier analysis of other logs
+                    if (out / name).is_file():
+                        (out / name).unlink()
+            meta["job"]["steps"].append(step)
             self.save_meta(run_id, meta)
-            if p.returncode != 0:
+            if p.returncode != 0 and not step.get("skipped"):
                 state = "failed"
                 break
         meta["job"].update(state=state, finished=time.time())
@@ -311,7 +326,7 @@ class Workspace(object):
     def results(self, run_id):
         out = self.run_dir(run_id) / "Output"
         res = {"meta": self.meta(run_id)}
-        for name in ("logs_analysis.json", "tracebacks.json", "triggers.json"):
+        for name in ("logs_analysis.json", "tracebacks.json", "cpp_warnings.json", "triggers.json"):
             p = out / name
             res[name.split(".")[0]] = json.loads(p.read_text(encoding="utf-8")) if p.is_file() else None
         return res
@@ -595,7 +610,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--port", type=int, default=8765)
     ap.add_argument("--workspace", default=str(HERE / "workspace"), help="where runs and reports are kept")
-    ap.add_argument("--skills-dir", help="folder containing analyze-logs/ and analyze-tracebacks/")
+    ap.add_argument("--skills-dir", help="folder containing analyze-logs/, analyze-tracebacks/ and analyze-cpp-warnings/")
     ap.add_argument("--max-upload-gb", type=float, default=4, help="largest archive accepted")
     ap.add_argument("--max-extract-gb", type=float, default=20,
                     help="largest total size an archive may unpack to, nested zips included")

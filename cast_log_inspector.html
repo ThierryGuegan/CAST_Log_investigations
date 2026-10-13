@@ -345,7 +345,9 @@ function renderRun() {
     $("#main").innerHTML = `<h2>${esc(m.name)}</h2><div class="msg err">The analysis stopped with an error. The message from the script is below.</div>${st}`;
     return;
   }
-  const tabs = [["overview", "Overview"], ["errors", "Tracebacks"], ["explain", "Explanations"], ["warnings", "Warnings"], ["compare", "Compare runs"], ["export", "Export"]];
+  const tabs = [["overview", "Overview"], ["errors", "Tracebacks"], ["explain", "Explanations"], ["warnings", "Warnings"]]
+    .concat(R.cpp_warnings ? [["cpp", "C/C++"]] : []).concat([["compare", "Compare runs"], ["export", "Export"]]);
+  if (!tabs.some(([k]) => k === S.tab)) S.tab = "overview";
   $("#main").innerHTML = `<h2>${esc(m.name)}</h2>
     <p class="lead">${esc(m.input)}${m.options && (m.options.redact || (m.options.redact_terms || []).length) ? " · reports masked" : ""}</p>
     <div class="actions" style="margin-top:0"><button class="btn secondary" id="again" aria-expanded="false">Analyse again</button></div>
@@ -368,7 +370,64 @@ function renderRun() {
       catch (e) { $("#againMsg").textContent = e.message; $("#againGo").disabled = false; }
     };
   };
-  ({ overview: tabOverview, errors: tabErrors, warnings: tabWarnings, explain: tabExplain, compare: tabCompare, export: tabExport })[S.tab]();
+  ({ overview: tabOverview, errors: tabErrors, warnings: tabWarnings, explain: tabExplain, cpp: tabCpp, compare: tabCompare, export: tabExport })[S.tab]();
+}
+
+/* ---- C/C++ warnings (analyze-cpp-warnings) */
+const codeMd = s => esc(s).replace(/`([^`]*)`/g, "<code>$1</code>");   // `x` -> <code>, after escaping
+const nfmt = v => (v == null ? "—" : Number(v).toLocaleString("en"));
+const base = p => String(p || "").replace(/\\/g, "/").split("/").pop();
+function cppTable(cols, rows) {   // cols: [label, key or fn, kind]; every cell goes through esc()
+  if (!rows.length) return '<p class="note">None.</p>';
+  const cell = (c, r) => { const v = typeof c[1] === "function" ? c[1](r) : r[c[1]]; return c[2] === "num" ? `<td class="num">${nfmt(v)}</td>` : c[2] === "code" ? `<td><code>${esc(v)}</code></td>` : `<td>${esc(v)}</td>`; };
+  return `<div class="tablewrap"><table><thead><tr>${cols.map(c => `<th${c[2] === "num" ? ' class="num"' : ""}>${esc(c[0])}</th>`).join("")}</tr></thead><tbody>${rows.map(r => `<tr>${cols.map(c => cell(c, r)).join("")}</tr>`).join("")}</tbody></table></div>`;
+}
+function tabCpp() {
+  const C = S.results.cpp_warnings, el = $("#tab"), T = C.totals, share = T.lines ? Math.round(100 * T.warnings / T.lines) : 0;
+  const stopped = C.logs.filter(l => l.files_total && !l.all_files_reached);
+  const sev = { high: "bad", medium: "warn", low: "" };
+  const kinds = { sdk: "Third-party SDK", other: "Not recognised (project or third-party)", platform: "Platform SDK", system: "System (C / POSIX / C++)" };
+  const mh = C.missing_headers, ui = C.unknown_identifiers, amb = C.ambiguous_includes, td = C.typedef_redefinitions, sf = C.source_files;
+  el.innerHTML = `
+    ${stopped.length ? `<div class="msg err"><b>The run did not finish.</b> <code>${esc(stopped[0].file)}</code> ends after source file ${nfmt(stopped[0].files_parsed)} of ${nfmt(stopped[0].files_total)} (${esc(stopped[0].last)}). Every count below covers only the part that ran; the log does not say why it stopped.</div>` : ""}
+    <div class="figures">
+      <div><b>${nfmt(T.warnings)}</b><span>warning lines (${share}% of the log)</span></div>
+      <div><b>${nfmt(mh.warnings)}</b><span>missing-header warnings (${nfmt(mh.distinct)} headers)</span></div>
+      <div><b>${nfmt(ui.warnings)}</b><span>unknown-identifier warnings (${nfmt(ui.distinct)})</span></div>
+      <div><b>${nfmt(T.errors)}</b><span>error lines</span></div>
+    </div>
+    <h3>Findings</h3>
+    ${C.findings.length ? C.findings.map((f, i) => `<div class="group"><h4>${i + 1}. ${codeMd(f.title)} <span class="${sev[f.severity] || ""}">· ${esc(f.severity)}</span></h4>
+      <ul>${f.evidence.map(e => `<li>${codeMd(e)}</li>`).join("")}</ul>
+      <div class="trigger"><b>Recommendation:</b> ${codeMd(f.recommendation)}</div></div>`).join("") : '<p class="note">No known root cause found.</p>'}
+    <h3>C/C++ logs</h3>
+    ${cppTable([["Log", "file", "code"], ["Size", l => (l.size_bytes / 1048576).toFixed(0) + " MB"], ["Warnings", "warnings", "num"], ["Start", "first"], ["End", "last"],
+      ["Source files reached", l => l.files_total ? nfmt(l.files_parsed) + " / " + nfmt(l.files_total) : "—"]], C.logs)}
+    <h3>Headers the preprocessor could not find</h3>
+    ${cppTable([["Kind", r => kinds[r[0]] || r[0]], ["Headers", r => r[1].headers, "num"], ["Warnings", r => r[1].warnings, "num"]], Object.entries(mh.by_category))}
+    <details open><summary>${nfmt(mh.rows.length)} most frequent headers</summary>
+    ${cppTable([["Header", "header", "code"], ["Kind", "label"], ["Warnings", "count", "num"], ["Including files", "includers", "num"],
+      ["Most frequent includer", r => r.top_includers.length ? base(r.top_includers[0].file) : "—", "code"]], mh.rows)}</details>
+    <h3>Unknown identifiers</h3>
+    <p class="note">Ignored token: the parser skipped it. Unknown directive: the analyzer suspects a missing macro. Before declaration: found where a type was expected, typical of export macros.</p>
+    <details open><summary>${nfmt(ui.distinct)} identifiers</summary>
+    ${cppTable([["Identifier", "token", "code"], ["Warnings", "count", "num"], ["Ignored token", "ignored", "num"], ["Unknown directive", "unknown_directive", "num"],
+      ["Before declaration", "decorator", "num"], ["Prefix", "family", "code"]], ui.rows)}</details>
+    <h3>Where the warnings come from</h3>
+    <p class="note">A header is parsed again for every source file that includes it: <i>Source files</i> is how many parsed source files reported warnings for it.</p>
+    ${cppTable([["File", "file", "code"], ["Warnings", "warnings", "num"], ["Share", r => T.warnings ? (100 * r.warnings / T.warnings).toFixed(1) + "%" : "—", "num"], ["Source files", "source_files", "num"]], C.files.rows)}
+    ${sf.parsed ? `<details><summary>Source files with the most warnings, and the slowest</summary>
+      ${cppTable([["#", "index", "num"], ["Source file", "file", "code"], ["Warnings", "warnings", "num"], ["Seconds", "seconds", "num"]], sf.most_warnings)}
+      <p class="note">Slowest:</p>
+      ${cppTable([["#", "index", "num"], ["Source file", "file", "code"], ["Seconds", "seconds", "num"], ["Warnings", "warnings", "num"]], sf.slowest)}</details>` : ""}
+    <h3>Ambiguous includes</h3>
+    ${cppTable([["Header", "header", "code"], ["Messages", "count", "num"], ["Chosen copy", "chosen", "code"], ["Including files", "includers", "num"], ["Chosen in another folder", "other_module_count", "num"]], amb.rows)}
+    <h3>Typedef redefinitions</h3>
+    ${cppTable([["Typedef", "typedef", "code"], ["Messages", "count", "num"], ["File", r => base(r.file), "code"]], td.rows)}
+    <details><summary>Warning patterns and error-level messages</summary>
+      ${cppTable([["Level", "level"], ["Count", "count", "num"], ["Pattern", "pattern", "code"], ["Example file", r => base(r.top_file), "code"]],
+        C.patterns.filter(p => p.level === "ERROR").concat(C.patterns.filter(p => p.level === "WARNING").slice(0, 30)))}</details>
+    <p class="note">The full report is <code>cpp_warnings_report.md</code> (Export tab).</p>`;
 }
 
 /* ---- overview */
@@ -415,6 +474,7 @@ function tabOverview() {
     <h3>Environment</h3>
     <table><tbody>${Object.entries(L.environment || {}).map(([k, v]) => `<tr><th style="position:static;width:220px">${esc(k)}</th><td>${v ? `<code>${esc(v)}</code>` : '<span class="note">absent</span>'}</td></tr>`).join("")}</tbody></table>
     <details><summary>${Object.keys(L.extensions || {}).length} extensions</summary><table><thead><tr><th>Extension</th><th>Version</th></tr></thead><tbody>${Object.entries(L.extensions || {}).map(([k, v]) => `<tr><td><code>${esc(k)}</code></td><td><code>${esc(v)}</code></td></tr>`).join("")}</tbody></table></details>
+    ${S.results.cpp_warnings ? `<h3>C/C++ analyzer</h3><p class="note">${S.results.cpp_warnings.findings.length} finding${S.results.cpp_warnings.findings.length === 1 ? "" : "s"} on the ${S.results.cpp_warnings.totals.warnings.toLocaleString("en")} warnings of the C/C++ analyzer: see the C/C++ tab.</p>` : ""}
     ${(L.warnings || []).length ? `<h3>Notes from the analysis</h3><ul>${L.warnings.map(w => `<li>${esc(w)}</li>`).join("")}</ul>` : ""}`;
   drawTimeline($("#tl"), L);
 }
@@ -625,7 +685,7 @@ async function tabCompare() {
 /* ---- export */
 function tabExport() {
   const m = S.results.meta, red = m.options && (m.options.redact || (m.options.redact_terms || []).length), id = encodeURIComponent(S.current);
-  const files = ["logs_analysis_report.md", "tracebacks_report.md", "logs_analysis.json", "tracebacks.json", "triggers.json"].concat(red ? ["triggers.shared.json"] : []);
+  const files = ["logs_analysis_report.md", "tracebacks_report.md", "logs_analysis.json", "tracebacks.json", "triggers.json"].concat(S.results.cpp_warnings ? ["cpp_warnings_report.md", "cpp_warnings.json"] : []).concat(red ? ["triggers.shared.json"] : []);
   $("#tab").innerHTML = `<div class="panel">
     <h3 style="margin-top:0">For your own use</h3><p class="note">All reports and the working explanations file (triggers.json). Keep triggers.json: give it to the next analysis of this application and your explanations carry over.</p>
     <div class="actions"><a class="btn" href="/api/runs/${id}/export">Download all reports</a></div>
