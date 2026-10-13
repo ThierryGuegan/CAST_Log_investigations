@@ -679,7 +679,43 @@ async function tabCompare() {
     <h3>Step durations</h3><div class="tablewrap"><table><thead><tr><th>Step</th><th class="num">${esc(A.meta.name)}</th><th class="num">${esc(B.meta.name)}</th><th class="num">Change</th></tr></thead><tbody>${keys.map(k => { const a = ha[k], b = hb[k], d = a != null && b != null ? b - a : null;
       return `<tr><td><code>${esc(k)}</code></td><td class="num">${f(a)}</td><td class="num">${f(b)}</td><td class="num ${d != null && Math.abs(d) >= 0.5 ? (d > 0 ? "bad" : "ok") : ""}">${d == null ? "—" : (d > 0 ? "+" : "") + f(Math.abs(d)).replace(/^/, d < 0 ? "−" : "")}</td></tr>`; }).join("")}</tbody></table></div>
     <h3>Error groups</h3>${errs.length ? `<table><thead><tr><th>Error</th><th class="num">${esc(A.meta.name)}</th><th class="num">${esc(B.meta.name)}</th></tr></thead><tbody>${errs.map(k => `<tr><td><code>${esc(k)}</code></td><td class="num">${ea.get(k) || "—"}</td><td class="num">${eb.get(k) || "—"}</td></tr>`).join("")}</tbody></table>` : '<p class="note">No tracebacks in either run.</p>'}
-    <h3>Largest changes in warning patterns</h3>${deltas.length ? `<table><thead><tr><th>Message pattern</th><th class="num">${esc(A.meta.name)}</th><th class="num">${esc(B.meta.name)}</th></tr></thead><tbody>${deltas.map(([k, a, b]) => `<tr><td><code>${esc(k)}</code></td><td class="num">${a.toLocaleString("en")}</td><td class="num">${b.toLocaleString("en")}</td></tr>`).join("")}</tbody></table>` : '<p class="note">Identical warning counts.</p>'}`;
+    <h3>Largest changes in warning patterns</h3>${deltas.length ? `<table><thead><tr><th>Message pattern</th><th class="num">${esc(A.meta.name)}</th><th class="num">${esc(B.meta.name)}</th></tr></thead><tbody>${deltas.map(([k, a, b]) => `<tr><td><code>${esc(k)}</code></td><td class="num">${a.toLocaleString("en")}</td><td class="num">${b.toLocaleString("en")}</td></tr>`).join("")}</tbody></table>` : '<p class="note">Identical warning counts.</p>'}${cppCompare(A, B)}`;
+}
+
+/* C/C++ section of the comparison: figures, findings (resolved / new) and the headers and identifiers that changed most */
+function cppCompare(A, B) {
+  const a = A.cpp_warnings, b = B.cpp_warnings;
+  if (!a && !b) return "";
+  const na = esc(A.meta.name), nb = esc(B.meta.name);
+  if (!a || !b) return `<h3>C/C++ analyzer</h3><p class="note">Only ${esc((a ? A : B).meta.name)} has C/C++ analyzer logs, so there is nothing to compare.</p>`;
+  const pick = (C, f) => { try { const v = f(C); return v == null ? null : v; } catch (e) { return null; } };
+  const reached = C => { const l = (C.logs || []).filter(x => x.files_total); return l.length ? l.reduce((s, x) => s + (x.files_parsed || 0), 0) : null; };
+  const total = C => { const l = (C.logs || []).filter(x => x.files_total); return l.length ? l.reduce((s, x) => s + (x.files_total || 0), 0) : null; };
+  const rows = [
+    ["Warning lines", C => C.totals.warnings, true], ["Error lines", C => C.totals.errors, true],
+    ["Missing-header warnings", C => C.missing_headers.warnings, true], ["Distinct missing headers", C => C.missing_headers.distinct, true],
+    ["Unknown-identifier warnings", C => C.unknown_identifiers.warnings, true], ["Distinct unknown identifiers", C => C.unknown_identifiers.distinct, true],
+    ["Ambiguous headers", C => C.ambiguous_includes.distinct, true], ["Typedef redefinitions", C => C.typedef_redefinitions.count, true],
+    ["Source files reached", reached, false], ["Source files in the log header", total, false]];
+  const chg = (x, y, lowerIsBetter) => x == null || y == null || x === y ? "" : `<span class="${lowerIsBetter ? (y < x ? "ok" : "bad") : ""}">${y > x ? "+" : "−"}${nfmt(Math.abs(y - x))}</span>`;
+  const figs = rows.map(([label, f, lower]) => { const x = pick(a, f), y = pick(b, f);
+    return `<tr><td>${esc(label)}</td><td class="num">${nfmt(x)}</td><td class="num">${nfmt(y)}</td><td class="num">${chg(x, y, lower)}</td></tr>`; }).join("");
+  const fa = new Map(a.findings.map(f => [f.id, f])), fb = new Map(b.findings.map(f => [f.id, f]));
+  const fids = [...new Set([...fa.keys(), ...fb.keys()])];
+  const state = id => fa.has(id) && fb.has(id) ? "in both" : fa.has(id) ? "resolved (only in " + A.meta.name + ")" : "new (only in " + B.meta.name + ")";
+  const fcell = id => fa.has(id) && fb.has(id) ? "" : fa.has(id) ? "ok" : "bad";
+  const find = fids.length ? `<div class="tablewrap"><table><thead><tr><th>Finding</th><th>Severity</th><th>Status</th></tr></thead><tbody>${fids.map(id => { const f = fb.get(id) || fa.get(id);
+    return `<tr><td>${codeMd(f.title)}</td><td>${esc(f.severity)}</td><td class="${fcell(id)}">${esc(state(id))}</td></tr>`; }).join("")}</tbody></table></div>` : '<p class="note">No findings in either run.</p>';
+  const diff = (ra, rb, key) => { const ma = new Map(ra.map(r => [r[key], r.count])), mb = new Map(rb.map(r => [r[key], r.count]));
+    return [...new Set([...ma.keys(), ...mb.keys()])].map(k => [k, ma.get(k), mb.get(k)]).filter(d => d[1] !== d[2])
+      .sort((x, y) => Math.abs((y[2] || 0) - (y[1] || 0)) - Math.abs((x[2] || 0) - (x[1] || 0))).slice(0, 15); };
+  const dtable = (title, d) => d.length ? `<h4 style="margin:16px 0 6px">${title}</h4><div class="tablewrap"><table><thead><tr><th>Name</th><th class="num">${na}</th><th class="num">${nb}</th></tr></thead><tbody>${d.map(([k, x, y]) => `<tr><td><code>${esc(k)}</code></td><td class="num">${nfmt(x)}</td><td class="num">${nfmt(y)}</td></tr>`).join("")}</tbody></table></div>` : "";
+  const dh = diff(a.missing_headers.rows, b.missing_headers.rows, "header"), di = diff(a.unknown_identifiers.rows, b.unknown_identifiers.rows, "token");
+  return `<h3>C/C++ analyzer</h3>
+    <div class="tablewrap"><table><thead><tr><th>Figure</th><th class="num">${na}</th><th class="num">${nb}</th><th class="num">Change</th></tr></thead><tbody>${figs}</tbody></table></div>
+    <h4 style="margin:16px 0 6px">Findings</h4>${find}
+    ${dtable("Missing headers that changed most", dh)}${dtable("Unknown identifiers that changed most", di)}
+    <p class="note">Header and identifier tables use the most frequent entries of each run: “—” means not among them. A run that stopped early has fewer warnings only because less of it ran.</p>`;
 }
 
 /* ---- export */
