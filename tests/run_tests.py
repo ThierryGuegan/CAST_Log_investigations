@@ -355,6 +355,74 @@ class CleanRuns(unittest.TestCase):
         SRV.ws.delete(rid)                                                        # now deletable without force
 
 
+class MultiArchive(unittest.TestCase):
+    """Several zips (one per phase) added to one run, each in its own folder."""
+
+    def phase_zip(self, tag):
+        return zip_bytes({"0-analyze.log": ANALYZE, "2-{}.log".format(tag): "x\n"})
+
+    def test_second_archive_is_added_beside_the_first_never_merged(self):
+        code, first = req("POST", "/api/upload", self.phase_zip("a"), {"X-Filename": "analyze_logs.zip", "X-Multi": "1", "X-Run-Name": "multi"})
+        self.assertEqual(code, 200, first)
+        rid = first["run"]["id"]
+        code, second = req("POST", "/api/upload", self.phase_zip("b"), {"X-Filename": "snapshot_logs.zip", "X-Add-To": rid})
+        self.assertEqual(code, 200, second)
+        self.assertEqual(second["run"]["id"], rid)
+        self.assertEqual(second["runs_found"], ["snapshot/0-analyze.log"])
+        inp = Path(first["run"]["input"])
+        self.assertTrue((inp / "analyze" / "0-analyze.log").is_file())
+        self.assertTrue((inp / "snapshot" / "0-analyze.log").is_file())              # same file name, not overwritten
+        code, third = req("POST", "/api/upload", self.phase_zip("c"), {"X-Filename": "snapshot_logs.zip", "X-Add-To": rid})
+        self.assertTrue((inp / "snapshot_2" / "2-c.log").is_file())                  # same archive name: own folder
+        SRV.ws.delete(rid)
+
+    def test_cannot_add_to_a_missing_analysed_or_folder_run(self):
+        self.assertEqual(req("POST", "/api/upload", self.phase_zip("a"), {"X-Add-To": "nope-20200101-000000"})[0], 404)
+        _, up = req("POST", "/api/upload", self.phase_zip("a"), {"X-Filename": "one.zip", "X-Multi": "1"})
+        rid = up["run"]["id"]
+        analyse(rid)
+        code, body = req("POST", "/api/upload", self.phase_zip("b"), {"X-Filename": "two.zip", "X-Add-To": rid})
+        self.assertEqual(code, 409, body)
+        SRV.ws.delete(rid)
+        folder = Path(TMP) / "multi_folder"
+        folder.mkdir(exist_ok=True)
+        (folder / "0-analyze.log").write_text(ANALYZE)
+        _, fr = req("POST", "/api/folder", {"path": str(folder)})
+        code, body = req("POST", "/api/upload", self.phase_zip("b"), {"X-Filename": "two.zip", "X-Add-To": fr["run"]["id"]})
+        self.assertEqual(code, 409, body)
+        SRV.ws.delete(fr["run"]["id"])
+
+    def test_a_bad_added_archive_leaves_the_run_intact(self):
+        _, up = req("POST", "/api/upload", self.phase_zip("a"), {"X-Filename": "good.zip", "X-Multi": "1"})
+        rid = up["run"]["id"]
+        code, _ = req("POST", "/api/upload", zip_bytes({"readme.txt": "x"}), {"X-Filename": "nologs.zip", "X-Add-To": rid})
+        self.assertEqual(code, 400)
+        inp = Path(up["run"]["input"])
+        self.assertTrue((inp / "good" / "0-analyze.log").is_file())
+        self.assertFalse((inp / "nologs").exists())                                  # nothing left from the refused one
+        SRV.ws.delete(rid)
+
+    def test_single_archive_still_extracts_straight_into_input(self):
+        _, up = req("POST", "/api/upload", self.phase_zip("a"), {"X-Filename": "plain.zip"})
+        self.assertTrue((Path(up["run"]["input"]) / "0-analyze.log").is_file())
+        self.assertEqual(up["runs_found"], ["0-analyze.log"])
+        SRV.ws.delete(up["run"]["id"])
+
+    def test_known_folder_is_exposed_to_warn_about_duplicates(self):
+        folder = Path(TMP) / "dup_folder"
+        folder.mkdir(exist_ok=True)
+        (folder / "0-analyze.log").write_text(ANALYZE)
+        _, chk = req("POST", "/api/folder/check", {"path": str(folder)})
+        _, fr = req("POST", "/api/folder", {"path": str(folder)})
+        _, runs = req("GET", "/api/runs")
+        mine = [r for r in runs if r["id"] == fr["run"]["id"]][0]
+        self.assertEqual(mine["input"], chk["path"])                                 # same string: the page compares them
+        zipped = req("POST", "/api/upload", self.phase_zip("a"), {"X-Filename": "z.zip"})[1]["run"]["id"]
+        self.assertIsNone([r for r in req("GET", "/api/runs")[1] if r["id"] == zipped][0]["input"])
+        SRV.ws.delete(fr["run"]["id"])
+        SRV.ws.delete(zipped)
+
+
 class AddRunChecks(unittest.TestCase):
     def test_folder_check_previews_without_creating_a_run(self):
         folder = Path(TMP) / "check_folder"

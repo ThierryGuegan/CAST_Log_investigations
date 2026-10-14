@@ -71,6 +71,14 @@ def phase_folder_name(zip_name):
     return stem or "archive"
 
 
+def unique_folder(parent, name):
+    target, n = parent / name, 2
+    while target.exists():
+        target = parent / "{}_{}".format(name, n)
+        n += 1
+    return target
+
+
 class ExtractLimit(ValueError):
     pass
 
@@ -221,7 +229,8 @@ class Workspace(object):
                     except ValueError:
                         pass
                 out.append({"id": meta["id"], "name": meta["name"], "created": meta["created"],
-                            "state": meta["job"]["state"], "status": status})
+                            "state": meta["job"]["state"], "status": status,
+                            "input": meta["input"] if meta.get("external_input") else None})
         return out
 
     def delete(self, run_id, force=False):
@@ -485,7 +494,8 @@ class Handler(BaseHTTPRequestHandler):
                             size += p.stat().st_size
                         except OSError:
                             pass
-                    return self._send(200, {"logs": len(logs), "runs_found": runs, "name": folder.name, "bytes": size})
+                    return self._send(200, {"logs": len(logs), "runs_found": runs, "name": folder.name, "bytes": size,
+                                      "path": str(folder.resolve())})
                 meta = ws.new_run(body.get("name") or folder.name, input_path=folder)
                 return self._send(200, {"run": meta, "logs": len(logs), "runs_found": runs})
             if parts == ["api", "runs", "clean"]:
@@ -571,6 +581,12 @@ class Handler(BaseHTTPRequestHandler):
             return self._error(413, "The archive is larger than the limit ({} GB).".format(self.server.max_upload // 1024 ** 3))
         name = self.headers.get("X-Filename", "run.zip")
         ws = self.server.ws
+        add_to = self.headers.get("X-Add-To")           # a further archive for a run made by the first one
+        multi = add_to or self.headers.get("X-Multi") == "1"
+        if add_to:
+            meta = ws.meta(add_to)                      # KeyError -> 404
+            if meta.get("external_input") or meta["job"].get("state") != "new":
+                return self._error(409, "This run cannot take more archives.")
         fd, tmp = tempfile.mkstemp(suffix=".zip", dir=str(ws.root))
         try:
             with os.fdopen(fd, "wb") as f:
@@ -583,15 +599,27 @@ class Handler(BaseHTTPRequestHandler):
                     left -= len(chunk)
             if not zipfile.is_zipfile(tmp):
                 return self._error(400, "That file is not a zip archive.")
-            meta = ws.new_run(self.headers.get("X-Run-Name") or phase_folder_name(Path(name).name))
+            if not add_to:
+                meta = ws.new_run(self.headers.get("X-Run-Name") or phase_folder_name(Path(name).name))
+            dest = Path(meta["input"])
+            if multi:                                    # several archives: one folder each, never merged
+                dest = unique_folder(dest, phase_folder_name(Path(name).name))
+
+            def discard():
+                if add_to:
+                    shutil.rmtree(str(dest), ignore_errors=True)
+                else:
+                    ws.delete(meta["id"], force=True)
             try:
-                nlogs, runs = extract_archive(Path(tmp), Path(meta["input"]), max_bytes=self.server.max_extract)
+                nlogs, runs = extract_archive(Path(tmp), dest, max_bytes=self.server.max_extract)
             except ValueError as e:
-                ws.delete(meta["id"], force=True)
+                discard()
                 return self._error(400, str(e))
             if nlogs == 0:
-                ws.delete(meta["id"], force=True)
+                discard()
                 return self._error(400, "The archive contains no .log file.")
+            if multi:
+                runs = [str(Path(dest.name) / r) for r in runs]
             return self._send(200, {"run": meta, "logs": nlogs, "runs_found": runs})
         finally:
             if os.path.exists(tmp):
