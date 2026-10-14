@@ -469,6 +469,8 @@ class GuiPage(unittest.TestCase):
         called = set(re.findall(r"(?<![.\w])(upload\w*|start\w*|show\w*|tab\w*|load\w*|open\w*|render\w*|read\w*|remember\w*|clean\w*)\(", script))
         self.assertEqual(sorted(c for c in called if c not in defined), [])
         self.assertIn("function tabCpp", script)                                  # the C/C++ tab exists
+        self.assertIn("function cppCompare", script)                              # ...and its part of Compare runs
+        self.assertIn("${cppCompare(A, B)}", script)                              # which tabCompare actually calls
 
 
 class Security(unittest.TestCase):
