@@ -8,9 +8,10 @@ Guidance for Claude Code when working in this repository.
 
 - `skills/analyze-logs/`: timing, run status, environment (CARL/CAIP, LISA/LTSA, KB schema), extensions. Script: `scripts/analyze_logs.py`.
 - `skills/analyze-tracebacks/`: Python tracebacks grouped by exception + message + raise site, plus WARNING/ERROR patterns and `triggers.json` explanations. Script: `scripts/analyze_tracebacks.py`.
-- `server.py` + `cast_log_inspector.html`: a local web GUI. It **analyses nothing**: it runs the two skill scripts and displays the JSON they write.
+- `skills/analyze-cpp-warnings/`: explains the warnings of C/C++ analyzer logs by root cause (missing headers, unknown macros, include paths, re-parsed headers, run reached its last source file). Script: `scripts/analyze_cpp_warnings.py`; outputs `cpp_warnings_report.md` and `cpp_warnings.json`.
+- `server.py` + `cast_log_inspector.html`: a local web GUI. It **analyses nothing**: it runs the skill scripts and displays the JSON they write. The C/C++ step and tab are optional: the step is skipped (exit 2, "No C/C++ analyzer log") for other runs, and a skills folder without that skill still works.
 
-The two skills are also used as Claude skills (claude.ai, `~/.claude/skills`), so each `SKILL.md` is a user-facing contract, not just documentation.
+The three skills are also used as Claude skills (claude.ai, `~/.claude/skills`), so each `SKILL.md` is a user-facing contract, not just documentation.
 
 ## Commands
 
@@ -19,9 +20,10 @@ python3 server.py                                     # GUI on http://127.0.0.1:
 python3 tests/run_tests.py                            # server / GUI
 python3 skills/analyze-logs/tests/run_tests.py        # analyze-logs
 python3 skills/analyze-tracebacks/tests/run_tests.py  # analyze-tracebacks
+python3 skills/analyze-cpp-warnings/tests/run_tests.py  # analyze-cpp-warnings
 ```
 
-Run **all three** test suites before every commit. They must all pass.
+Run **all four** test suites before every commit. They must all pass.
 
 ## Hard rules
 
@@ -39,7 +41,7 @@ Run **all three** test suites before every commit. They must all pass.
 ### Security and privacy (non-negotiable)
 - **Credentials are always masked**, in every output, as lines are read and before anything is derived from them. Never weaken a masking regex to make a test pass; never add an output path that bypasses masking.
 - `--redact` / `--redact-term` masking must keep JSON valid (mask value by value) and never alter placeholders (`<host>`, `<path>`…).
-- Never paste or quote raw log lines (in code comments, test fixtures, commit messages, answers). Use the reports or pipe through `--mask`. Test fixtures use invented values only.
+- Never paste or quote raw log lines (in code comments, test fixtures, commit messages, answers). This includes customer folder, host and project names seen in a log: use invented ones (`modA`, `<root>`). Use the reports or pipe through `--mask`. Test fixtures use invented values only.
 - **Never commit real customer logs**, reports or `workspace/` content (it is in `.gitignore`).
 - Server: listens on `127.0.0.1` only; writing requests require the `X-CAST-GUI` header; requests for other host names are refused. Keep all three.
 - `cast_log_inspector.html` loads **nothing from the internet** (no CDN, fonts or scripts). Every value coming from logs is inserted as text (`textContent`), never as HTML.
@@ -55,7 +57,9 @@ Run **all three** test suites before every commit. They must all pass.
 
 ## Keeping docs in sync
 
-- The two `SKILL.md` files share whole sections (Running both skills, Where things are, credential masking). Edit them in both files identically.
+- `analyze-logs` and `analyze-tracebacks` share whole `SKILL.md` sections (Running both skills, Where things are, credential masking): edit them in both files identically. `analyze-cpp-warnings` has its own short "With the other skills" section and shares "Where things are".
+- The redaction block between the `shared-redaction` markers is byte-identical in the **three** scripts. Edit it once, copy it whole into the others, then update `SHARED_BLOCK_SHA` in all three test files.
+- C/C++ skill: when the JSON of `cpp_warnings.json` changes, update `tabCpp` / `cppCompare` in the page and the server tests too.
 - When a CLI flag, output file or behaviour changes, update the `SKILL.md` of the skill concerned, the script's docstring, and `README.md` if the GUI is affected.
 - Bump nothing silently: describe user-visible changes in the commit message.
 
