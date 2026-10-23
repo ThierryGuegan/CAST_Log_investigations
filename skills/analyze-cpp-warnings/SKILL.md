@@ -50,10 +50,15 @@ This skill covers the warnings of the C/C++ analyzer only. For a general request
      4. *A few headers produce most warnings, each parsed again per source file*: fix these first, or exclude generated files that are not wanted in the results.
      5. *Same header name in several folders*: the analyzer chose the closest copy; check it is the intended one.
      6. *Typedef redefinitions*: informational; the analyzer skips the second definition.
+     7. *The analyzer reports that the analysis stopped* (cancelled on user request, run-time or unknown exception, fatal error, paths of the configuration that no longer exist): quote the message and the resolution from the report. A crash ("please send the preprocessed file") goes to CAST Support with that file; a cancellation is restarted.
+     8. *Messages the CAST documentation rates as errors* and logged at ERROR level (unable to open a file, invalid include path in an environment profile, parsing error, ...): their impact is that the results are corrupt or incomplete.
+   - The **Documented log messages** section of the report lists every message of the CAST documentation that the log contains, with the level, impact and resolution the documentation gives. Use it to answer "what does this message mean?". A message the documentation rates as an error can be logged as a WARNING (for example the unknown compilation directive of the `[Configuration]` tag, which every C/C++ run has); say what the documentation says, but do not present it as a crash.
+   - If the analysis ran out of memory (the documentation advises watching the process: above about 1.9 GB the analysis unit is too big), the fix is to split it into several smaller analysis units.
    - What improves once fixed: fewer warnings, a smaller log, and more accurate links, because types that are currently ignored (for example the application's own generated `*_t` types) become known objects.
    - Then: fix, rerun, and look for a time limit or operator action if the run stops again.
 
 4. **Sanity-check** before answering:
+   - The documented level, impact and resolution come from the CAST documentation (C and Cpp Analyzer 3.0, *Log messages*), not from this log. A message that is not in that section is not described there: do not invent a meaning for it.
    - Quote the numbers of the report, not your own recount. Warnings by source tag add up to the WARNING total (a few warnings have no tag).
    - A header is classified *Not recognised* when it is neither a system header nor a known SDK; say "project or third-party headers" for those, and never name a vendor the report did not name.
    - Per-file counts (*Where the warnings come from*) cover the warnings that name a file. A note appears in the report if a memory cap was hit, and the figures are then lower bounds.
@@ -78,9 +83,12 @@ Every value taken from the logs is in code formatting, so the report reads the s
 7. Where the warnings come from: files, source files with the most warnings, slowest source files
 8. Ambiguous includes
 9. Typedef redefinitions
-10. Warning patterns and error-level messages
-11. Notes (memory caps, if hit)
+10. Documented log messages (grouped like the CAST documentation: analysis stops prematurely, missing source code, configuration problems, ambiguous object names, other problems)
+11. Warning patterns and error-level messages
+12. Notes (memory caps, if hit)
 
 ## Maintenance
+
+The catalogue of documented messages is `KNOWN_MESSAGES` in the script (id, documentation issue, regex tried on the lowercase message pattern, title, documented level, impact, resolution, whether the analysis ended). First match wins, so specific entries come first. When the documentation changes, edit it there and keep `DocumentedMessages.SAMPLES` in the tests complete: a test fails if an entry has no sample. Missing headers are counted apart from the patterns, so their line count is added to the catalogue separately.
 
 `tests/run_tests.py` holds regression tests; run `python3 tests/run_tests.py` after any change, all must pass. The redaction code between the `shared-redaction` markers is deliberately identical in analyze-logs, analyze-tracebacks and this skill. Apply any change to all three scripts, then update `SHARED_BLOCK_SHA` in all three test files; each skill installs separately and cannot see the others' code, so always edit the block in one place and copy it whole into the others. The only masking logic added here is a memo that returns exactly what `mask_line` returns for the first identical line (the same line repeats once per including source file).

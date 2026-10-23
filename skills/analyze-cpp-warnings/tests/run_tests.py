@@ -312,6 +312,107 @@ class TimingAndPatterns(unittest.TestCase):
         self.assertEqual(sorted(p.name for p in out.iterdir()), ["cpp_warnings.json", "cpp_warnings_report.md"])
 
 
+class DocumentedMessages(unittest.TestCase):
+    """The messages listed in the CAST documentation (C and Cpp Analyzer 3.0, Log messages) are recognised,
+    with the impact and the resolution the documentation gives."""
+
+    SAMPLES = {   # invented names; the wording follows the documented messages
+        "user-cancel": "Analysis canceled on user request.",
+        "runtime-exception": "Run-time exception occurred, analysis canceled: out of memory",
+        "send-preprocessed": "Please take a copy of the file '/data/a/pre.i' and send it to CAST, to help analyze the issue.",
+        "unknown-exception": "Unknown exception occurred, analysis canceled.",
+        "fatal-error": "Fatal error: something broke",
+        "analysis-canceled": "Analysis canceled.",
+        "invalid-positions": "Invalid positions (start, end) found for object Foo when computing CRC: 1, 2",
+        "parser-error": "Parser error \\",
+        "unexisting-paths": "Some unexisting paths where found in the configuration.",
+        "invalid-include-path": "Invalid include path /opt/x/include, declared in environment profile 'ProfA'",
+        "unknown-directive": "[Configuration] MY_EXPORT: Unknown identifier 'MY_EXPORT' is probably an unknown compilation directive.",
+        "unable-open": "Unable to open file 'q.h' and to compute CRC. Reason: denied",
+        "missing-header": "Preprocessor cannot find file 'q.h'. (file /data/a/b.c, line 3)",
+        "selected-and-included": "Following file(s) is/are selected for analysis, while being also included by other analyzed file(s). "
+                                 "Maybe you want to consider removing that/these file(s) from the selection: a.c",
+        "pch-position": "Trying to include a precompiled header from another place than the start of the compiled file "
+                        "(file 'a.c', line 9). This can cause strange behavior. PCH usage deactivated.",
+        "empty-variable": "Empty variable name encountered (is that a C++ file?)",
+        "several-objects": "Several definitions found for Foo. Two objects will be created: 1, 2",
+        "several-symbol": "Several definitions found for symbol _Z3foov: 1, 2",
+        "multiple-definitions": "Multiple definitions found for 'Foo'. A link will be traced towards each of these definitions: 1, 2",
+        "unresolved-identifier": "Unresolved identifier Foo",
+        "called-undeclared": "Function foo() is called without having been declared.",
+        "no-parent": "No parent class nor namespace found for method bar. Object will be saved under its parent file only.",
+        "now-a-type": "Unknown identifier MY_T is now considered as a type.",
+        "system-functions": "Unable to access list of system functions implied in diags (strcpy, gets...).",
+        "recursive-flag": "Flag 'recursive' has been set for include path '/opt/x'. This flag is generally of no use.",
+        "no-executable-code": "File a.h has no executable code.",
+        "parser-misc": "[Parser] XYZ: Ignored token 'XYZ'.",
+    }
+
+    def test_every_documented_message_is_recognised(self):
+        m = _load_script()
+        self.assertEqual(sorted(self.SAMPLES), sorted(e[0] for e in m.KNOWN_MESSAGES))      # none left untested
+        for want, text in self.SAMPLES.items():
+            got = m.match_known(m.message_template(text))
+            self.assertEqual(got[0] if got else None, want, text)
+
+    def test_messages_the_documentation_does_not_list_are_not_claimed(self):
+        m = _load_script()
+        for text in ("Preprocessor has found several possibilities for common.h. Chose closest : /x/common.h",
+                     "Skipping illegal redefinition of typedef Int8.", "Parsing file (1/3) /data/a/b.c...",
+                     "Compiling source files (3 items)..."):
+            self.assertIsNone(m.match_known(m.message_template(text)), text)
+
+    def test_ordinary_log_lists_documented_messages(self):
+        data, report, _, _ = run({"a.log": build_log(3)})
+        rows = {r["id"]: r for r in data["known_messages"]["rows"]}
+        self.assertEqual(rows["missing-header"]["count"], 12)                      # 4 per source file, 3 files
+        self.assertEqual(rows["missing-header"]["doc_level"], "Warning")
+        self.assertEqual(rows["missing-header"]["levels"], ["WARNING"])
+        self.assertIn("unknown-directive", rows)
+        self.assertIn("parser-misc", rows)
+        self.assertNotIn("several possibilities", " ".join(r["id"] for r in rows.values()))
+        self.assertTrue(all(p["known"] in rows or p["known"] == "" for p in data["patterns"]))
+        self.assertEqual(sum(p["count"] for p in data["patterns"] if p["known"]) + rows["missing-header"]["count"],
+                         data["known_messages"]["documented_lines"])            # missing headers are not patterns
+        self.assertIsNone(finding(data, "analysis-stopped"))
+        self.assertIn("## Documented log messages", report)
+        self.assertIn("An included file is missing", report)
+        self.assertIn("Add the file or correct the include path.", report)
+        self.assertNotIn("the analysis ended**", report)
+
+    def test_a_message_saying_the_analysis_ended_is_stated_first(self):
+        extra = ["{} [ERROR] Analysis canceled on user request.".format(ts(70)),
+                 "{} [ERROR] Run-time exception occurred, analysis canceled: out of memory".format(ts(71)),
+                 "{} [ERROR] Unable to open file 'q.h' and to compute CRC. Reason: denied".format(ts(72))]
+        data, report, _, _ = run({"a.log": build_log(2, extra=extra)})
+        f = finding(data, "analysis-stopped")
+        self.assertEqual(f["severity"], "high")
+        self.assertEqual(len(f["evidence"]), 2)
+        self.assertIn("Restart the analysis.", f["recommendation"])
+        self.assertIn("Contact CAST Support.", f["recommendation"])
+        e = finding(data, "documented-errors")
+        self.assertEqual(len(e["evidence"]), 1)                                    # the documented-as-error message logged as ERROR
+        self.assertIn("Unable to open a file", e["evidence"][0])
+        self.assertIn("ERROR", e["evidence"][0])
+        self.assertLess(report.index("the analysis ended**"), report.index("## Findings"))
+        self.assertIn("### Analysis stops prematurely", report)
+        self.assertIn("### Configuration problems", report)
+
+    def test_error_documented_but_logged_as_warning_is_not_a_finding(self):
+        data, report, _, _ = run({"a.log": build_log(2)})            # the ordinary [Configuration] ... unknown compilation directive
+        self.assertIn("unknown-directive", [r["id"] for r in data["known_messages"]["rows"]])
+        self.assertIsNone(finding(data, "documented-errors"))        # warnings in every C/C++ run are not "errors"
+        self.assertIn("A macro or an include file is not defined", report)
+
+    def test_documented_messages_are_masked_like_everything_else(self):
+        extra = ["{} [ERROR] Fatal error: cannot reach connectPassword=\"hunter2secret\" connect to dbsrv02.lan.corp.acme:5432 failed".format(ts(70))]
+        data, report, out, _ = run({"a.log": build_log(1, extra=extra)}, "--redact")
+        blob = json.dumps(data) + report
+        self.assertNotIn("hunter2secret", blob)
+        self.assertNotIn("dbsrv02", blob)
+        self.assertIsNotNone(finding(data, "analysis-stopped"))
+
+
 class Masking(unittest.TestCase):
     SECRET = "Zx9Qv7pw"
 

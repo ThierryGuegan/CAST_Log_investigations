@@ -5,7 +5,10 @@ A C/C++ log can hold millions of WARNING lines. Most of them come from a handful
 causes: headers that were not delivered (system headers, third-party SDKs), macros and types
 that are therefore unknown, and the same header re-parsed for every source file that includes
 it. This script streams the logs (never loading one in memory), counts the lines per kind and
-reports the root causes with their evidence and a recommendation.
+reports the root causes with their evidence and a recommendation. The messages that the CAST
+documentation lists for the C and Cpp Analyzer ("Log messages") are recognised (KNOWN_MESSAGES) and
+shown with the level, impact and resolution the documentation gives; a message saying that the
+analysis ended (cancelled, crashed, fatal error) becomes a finding of its own.
 
 Outputs (in --output):
   cpp_warnings_report.md   markdown report: verdict, findings, tables
@@ -358,6 +361,102 @@ def token_family(token):
     """Identifier prefix before the first underscore (RTI_BOOL -> RTI), '' when there is none."""
     head = token.split("_", 1)[0]
     return head if "_" in token and 2 <= len(head) <= 12 and head.isupper() else ""
+
+
+# --------------------------------------------------------------------------- documented messages
+# The log messages that the CAST documentation lists for the C and Cpp Analyzer 3.0 ("Log messages",
+# doc.castsoftware.com/technologies/c-cpp/com.castsoftware.cpp/3.0). Each entry: id, documentation issue
+# number, regex tried on the lowercase message pattern (first match wins, so specific entries come first),
+# title, level the documentation gives it, impact, resolution, and whether it means the analysis ended.
+ISSUES = {1: "Analysis stops prematurely", 2: "Missing source code", 3: "Configuration problems",
+          4: "Ambiguous object names", 6: "Other problems"}
+_NOSUPPORT = "Contact CAST Support."
+_PREPRO = "Contact CAST Support and send them the preprocessed file."
+KNOWN_MESSAGES = [
+    ("user-cancel", 1, r"analysis canceled on user request", "Analysis cancelled by the user", "Error",
+     "The analysis ended.", "Restart the analysis.", True),
+    ("runtime-exception", 1, r"run-time exception occurred, analysis canceled", "Run-time exception: the analysis crashed",
+     "Error", "The analysis ended without any result.", _NOSUPPORT, True),
+    ("send-preprocessed", 1, r"please take a copy of the file .* and send it to cast",
+     "Crash report: CAST asks for the preprocessed file", "Error", "The analysis ended without any result.",
+     "Contact CAST Support and send them the preprocessed file named in the message.", True),
+    ("unknown-exception", 1, r"unknown exception occurred, analysis canceled", "Unknown exception: the analysis crashed",
+     "Error", "The analysis ended without any result.", _NOSUPPORT, True),
+    ("fatal-error", 1, r"\bfatal error:", "Fatal error: the analysis crashed", "Error",
+     "The analysis ended without any result.", _NOSUPPORT, True),
+    ("analysis-canceled", 1, r"^analysis canceled\.?$", "Analysis cancelled", "Error", "The analysis ended without any result.",
+     "Restart the analysis; if it happens again, contact CAST Support.", True),
+    ("invalid-positions", 1, r"invalid positions \(start, end\) found for object",
+     "Internal error: invalid positions found when computing a CRC", "Error", "The result of the analysis will be corrupt.",
+     _PREPRO, False),
+    ("parser-error", 1, r"^(?:\[parser\] )?(?:parser|parsing) error", "Parsing error", "Error",
+     "The result of the analysis can be corrupt.", _PREPRO, False),
+    ("unexisting-paths", 1, r"some unexisting paths (?:were|where) found in the configuration",
+     "Paths of the configuration do not exist (source code, includes or macros added by hand)", "Error",
+     "The analysis ended without any result.",
+     "Correct the location of the manually added source code, includes and macros (typically the deployment folder "
+     "changed between versions), then rerun.", True),
+    ("invalid-include-path", 2, r"invalid include path .* declared in environment profile",
+     "Invalid include path declared in an environment profile", "Error", "The results of the analysis may be corrupt.",
+     "Correct the definition of the profile or select another profile.", False),
+    ("unknown-directive", 2, r"unknown compilation directive",
+     "A macro or an include file is not defined (probably a missing header)", "Error",
+     "The results of the analysis will be corrupt.", "Correct the configuration or define the missing macro.", False),
+    ("unable-open", 3, r"unable to open file", "Unable to open a file (or to compute its CRC)", "Error",
+     "The result of the analysis will be corrupt.",
+     "Check that the file is accessible (network, permissions) or contact CAST Support.", False),
+    ("missing-header", 3, r"preprocessor cannot find file", "An included file is missing", "Warning",
+     "The result of the analysis may be corrupt.", "Add the file or correct the include path.", False),
+    ("selected-and-included", 3, r"selected for analysis, while being also included by other analy[sz]ed file",
+     "Files are selected for analysis and also included by other analysed files", "Warning",
+     "Inconsistencies are possible if they are parsed with different preprocessing contexts (for example other macros).",
+     "Correct the analysis configuration: consider removing these files from the selection.", False),
+    ("pch-position", 3, r"trying to include a precompiled header from another place",
+     "Precompiled header included from somewhere other than the start of the file", "Warning",
+     "No impact (precompiled header usage is deactivated).",
+     "Avoid including .pch files from source code that is itself included.", False),
+    ("empty-variable", 4, r"empty variable name encountered", "Empty variable name", "Warning",
+     "The result of the analysis will be corrupt (most probably an earlier parsing error).",
+     "Correct the analysis configuration.", False),
+    ("several-objects", 4, r"several definitions found for .*two objects will be created",
+     "Several definitions of the same object in the same source code", "Warning",
+     "The analysis will contain unwanted links.", "Split the Analysis Unit into several parts.", False),
+    ("several-symbol", 4, r"several definitions found for symbol", "Several definitions of the same symbol", "Warning",
+     "The analysis will contain unwanted links; references to the symbol can be duplicated.",
+     "Split the Analysis Unit into several parts.", False),
+    ("multiple-definitions", 4, r"multiple definitions found for", "Several definitions found, a link to each", "Warning",
+     "Unwanted links can be created.", _NOSUPPORT, False),
+    ("unresolved-identifier", 4, r"unresolved identifier", "Unresolved identifier (some source code may be missing)",
+     "Warning", "Some links are missing.", "Correct the analysis configuration or contact CAST Support.", False),
+    ("called-undeclared", 4, r"is called without having been declared", "Function called without a declaration (C only)",
+     "Warning", "No impact.", "Check the analysis configuration.", False),
+    ("no-parent", 4, r"no parent class nor namespace found for", "No parent class or namespace found for a method",
+     "Warning", "The result of the analysis may be corrupt (headers with class definitions are probably missing).",
+     "Correct the analysis configuration (the include paths).", False),
+    ("now-a-type", 4, r"is now considered as a type", "Unknown identifier now treated as a type", "Warning",
+     "No impact.", "Complete the macro definition list to remove the warning.", False),
+    ("system-functions", 6, r"unable to access list of system functions", "Cannot access the list of system functions",
+     "Error", "The result of the analysis will be corrupt.", _NOSUPPORT, False),
+    ("recursive-flag", 6, r"flag .* has been set for include path", "Recursive flag set on an include path",
+     "Warning", "The result of the analysis will be corrupt (the order of the included files is not the intended one).",
+     "Remove the 'recursive' flag.", False),
+    ("no-executable-code", 6, r"has no executable code", "File without executable code", "Warning",
+     "The result of the analysis may be corrupt.", "Check the analysis configuration.", False),
+    ("parser-misc", 6, r"single operand or parenthesized expression expected|nonstandard untyped declaration|"
+     r"ignored token|variable has already a name|variable already has type|variable name expected",
+     "Parser messages: usually a missing macro or header", "Warning", "Potentially missing links.",
+     "Check the analysis configuration and the delivered source code.", False),
+]
+_KNOWN_RES = [(e, re.compile(e[2])) for e in KNOWN_MESSAGES]
+
+
+def match_known(pattern):
+    """The documented message a pattern belongs to, or None."""
+    low = pattern.lower()
+    for entry, rx in _KNOWN_RES:
+        if rx.search(low):
+            return entry
+    return None
 
 
 # --------------------------------------------------------------------------- parsing
@@ -746,6 +845,27 @@ def build_data(c, infos, cpp_logs, scanned, top):
         patterns.append({"level": lvl, "pattern": tmpl, "count": n, "sample": sample,
                          "files": len(fmap), "top_file": top_file})
     patterns.sort(key=lambda r: (-r["count"], r["pattern"]))
+    known = OrderedDict()
+
+    def add_known(entry, count, level, patterns_n=1):
+        row = known.get(entry[0])
+        if row is None:
+            row = known[entry[0]] = {"id": entry[0], "issue": entry[1], "title": entry[3], "doc_level": entry[4],
+                                     "impact": entry[5], "resolution": entry[6], "stops": entry[7],
+                                     "count": 0, "patterns": 0, "levels": []}
+        row["count"] += count
+        row["patterns"] += patterns_n
+        if level not in row["levels"]:
+            row["levels"].append(level)
+    for pt in patterns:
+        entry = match_known(pt["pattern"])
+        pt["known"] = entry[0] if entry else ""
+        if entry:
+            add_known(entry, pt["count"], pt["level"])
+    mh_lines = sum(r["count"] for r in missing)                 # missing headers are counted apart, not as patterns
+    if mh_lines:
+        add_known(match_known("preprocessor cannot find file"), mh_lines, "WARNING", len(missing))
+    known_rows = sorted(known.values(), key=lambda r: (r["issue"], -r["count"], r["id"]))
     ignored_total = sum(t["ignored"] for t in tokens)
     parser_total = sum(n for (lvl, tag), n in c.tags.items() if tag in ("Parser", "Configuration"))
 
@@ -776,6 +896,9 @@ def build_data(c, infos, cpp_logs, scanned, top):
                                      "by_file": [{"file": f, "count": n} for f, n in typedef_files.most_common(5)],
                                      "rows": typedefs[:top]}
     data["patterns"] = patterns
+    data["known_messages"] = {"issues": {str(k): v for k, v in ISSUES.items()}, "rows": known_rows,
+                              "documented_lines": sum(r["count"] for r in known_rows),
+                              "other_lines": sum(pt["count"] for pt in patterns if not pt["known"])}
     data["findings"] = build_findings(data)
     return data
 
@@ -903,6 +1026,21 @@ def build_findings(d):
                         ", ".join("`{}`".format(base(x["file"])) for x in td["by_file"][:3]))],
                     "recommendation": "Informational: the analyzer skips the second definition. Usually the same type "
                                       "declared by two headers; no action needed unless the types differ."})
+    km = d["known_messages"]["rows"]
+    stops = [r for r in km if r["stops"]]
+    if stops:
+        out.append({"id": "analysis-stopped", "severity": "high",
+                    "title": "The analyzer reports that the analysis stopped",
+                    "evidence": ["{} ({} lines) - {}".format(r["title"], n(r["count"]), r["impact"]) for r in stops[:5]],
+                    "recommendation": " ".join(sorted(set(r["resolution"] for r in stops)))})
+    # documented as errors AND logged at ERROR level (the C/C++ analyzer logs some of them as warnings in every run)
+    docerr = [r for r in km if r["doc_level"] == "Error" and not r["stops"] and "ERROR" in r["levels"]]
+    if docerr:
+        out.append({"id": "documented-errors", "severity": "high",
+                    "title": "Messages the CAST documentation rates as errors",
+                    "evidence": ["{} ({} lines, logged as {}) - {}".format(
+                        r["title"], n(r["count"]), "/".join(r["levels"]), r["impact"]) for r in docerr[:6]],
+                    "recommendation": " ".join(sorted(set(r["resolution"] for r in docerr[:6])))})
     # run progress
     unfinished = [l for l in d["logs"] if l["files_total"] and not l["all_files_reached"]]
     for l in unfinished:
@@ -980,6 +1118,10 @@ def build_report(d, top):
         l = unfinished[0]
         out += ["> ⚠ **The run probably did not finish**: the log ends after source file {} of {} ({}). Every count below "
                 "covers only the part that ran.".format(n(l["files_parsed"]), n(l["files_total"]), l["last"]), ""]
+    stopped = [r for r in d["known_messages"]["rows"] if r["stops"]]
+    if stopped:
+        out += ["> ⚠ **The log contains a message saying the analysis ended**: {}. See the finding and the documented "
+                "messages below.".format("; ".join(r["title"] for r in stopped[:3])), ""]
     out.append("{} lines: **{} WARNING**, {} INFO, {} ERROR ({} of the lines and {} of the size are warnings).".format(
         n(tot["lines"]), n(tot["warnings"]), n(tot["info"]), n(tot["errors"]),
         pct(tot["warnings"], tot["lines"]), pct(tot["warning_bytes"], tot["all_bytes"])))
@@ -1080,6 +1222,24 @@ def build_report(d, top):
                 "| Typedef | Messages | File |", "|---------|----------|------|"]
         for r in td["rows"]:
             out.append("| {} | {} | {} |".format(code(r["typedef"]), n(r["count"]), code(base(r["file"]))))
+    km = d["known_messages"]
+    out += ["", "---", "", "## Documented log messages", ""]
+    if not km["rows"]:
+        out.append("*None of the message patterns matches a message of the CAST documentation.*")
+    else:
+        out += ["The messages below are described in the CAST documentation of the C and Cpp Analyzer 3.0 "
+                "(section *Log messages*). *Documented level* is the one the documentation gives; *Seen as* is the "
+                "level in this log. {} lines belong to documented messages; {} other warning or error lines have no "
+                "counterpart in the documentation.".format(
+                    n(km["documented_lines"]), n(km["other_lines"])), ""]
+        for issue in sorted({r["issue"] for r in km["rows"]}):
+            out += ["### " + km["issues"][str(issue)], "", "| Message | Documented level | Seen as | Lines | Impact | Resolution |",
+                    "|---------|------------------|---------|-------|--------|------------|"]
+            for r in [r for r in km["rows"] if r["issue"] == issue]:
+                out.append("| {} | {} | {} | {} | {} | {} |".format(
+                    cell(r["title"]), r["doc_level"], "/".join(r["levels"]), n(r["count"]), cell(r["impact"]),
+                    cell(r["resolution"])))
+            out.append("")
     pats = d["patterns"]
     shown = [p for p in pats if p["level"] == "WARNING"][:top]
     out += ["", "---", "", "## Warning patterns", "", "| Warnings | Pattern | Files | Example file |",

@@ -481,6 +481,9 @@ class CppSkill(unittest.TestCase):
         self.assertEqual(cw["totals"]["warnings"], 4)
         self.assertFalse(cw["logs"][0]["all_files_reached"])                       # 2 of 5: shown as unfinished
         self.assertIn("missing-system-headers", [f["id"] for f in cw["findings"]])
+        known = {r["id"]: r for r in cw["known_messages"]["rows"]}                 # documented messages, shown by the C/C++ tab
+        self.assertEqual(known["missing-header"]["count"], 2)
+        self.assertEqual(known["parser-misc"]["doc_level"], "Warning")
         code, md = req("GET", "/api/runs/{}/file/cpp_warnings_report.md".format(rid), raw=True)
         self.assertEqual(code, 200)
         self.assertIn(b"did not finish", md)
@@ -537,6 +540,7 @@ class GuiPage(unittest.TestCase):
         called = set(re.findall(r"(?<![.\w])(upload\w*|start\w*|show\w*|tab\w*|load\w*|open\w*|render\w*|read\w*|remember\w*|clean\w*)\(", script))
         self.assertEqual(sorted(c for c in called if c not in defined), [])
         self.assertIn("function tabCpp", script)                                  # the C/C++ tab exists
+        self.assertIn("known_messages", script)                                   # ...the documented messages of the C/C++ tab
         self.assertIn("function cppCompare", script)                              # ...and its part of Compare runs
         self.assertIn("${cppCompare(A, B)}", script)                              # which tabCompare actually calls
 
