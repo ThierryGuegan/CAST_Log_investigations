@@ -4,7 +4,7 @@ A local web interface for the **analyze-logs**, **analyze-tracebacks** and **ana
 
 The interface itself analyses nothing. It runs the skill scripts and displays the JSON they write, so the results are exactly the skills' results.
 
-The **C/C++** tab appears for runs that contain C/C++ analyzer logs (millions of `Preprocessor` / `[Parser]` warnings): it lists the root causes (missing headers, unknown macros, include paths), each with its evidence and a recommendation. For other runs the third analysis step is skipped without error. If your `skills/` folder has no `analyze-cpp-warnings/`, the interface still works without that tab.
+The **C/C++** tab appears for runs that contain C/C++ analyzer logs (millions of `Preprocessor` / `[Parser]` warnings): it lists the root causes (missing headers, unknown macros, include paths), each with its evidence and a recommendation, and the messages described in the CAST documentation of the C and Cpp Analyzer (*Log messages*) with the level, impact and resolution it gives. For other runs the third analysis step is skipped without error. If your `skills/` folder has no `analyze-cpp-warnings/`, the interface still works without that tab.
 
 ## Start
 

@@ -418,6 +418,7 @@ function tabCpp() {
   const stopped = C.logs.filter(l => l.files_total && !l.all_files_reached);
   const sev = { high: "bad", medium: "warn", low: "" };
   const kinds = { sdk: "Third-party SDK", other: "Not recognised (project or third-party)", platform: "Platform SDK", system: "System (C / POSIX / C++)" };
+  const km = C.known_messages;                       // absent in results written by an older version of the skill
   const mh = C.missing_headers, ui = C.unknown_identifiers, amb = C.ambiguous_includes, td = C.typedef_redefinitions, sf = C.source_files;
   el.innerHTML = `
     ${stopped.length ? `<div class="msg err"><b>The run probably did not finish.</b> <code>${esc(stopped[0].file)}</code> ends after source file ${nfmt(stopped[0].files_parsed)} of ${nfmt(stopped[0].files_total)} (${esc(stopped[0].last)}). Every count below covers only the part that ran; the log does not say why it stopped.</div>` : ""}
@@ -434,6 +435,10 @@ function tabCpp() {
     <h3>C/C++ logs</h3>
     ${cppTable([["Log", "file", "code"], ["Size", l => (l.size_bytes / 1048576).toFixed(0) + " MB"], ["Warnings", "warnings", "num"], ["Start", "first"], ["End", "last"],
       ["Source files reached", l => l.files_total ? nfmt(l.files_parsed) + " / " + nfmt(l.files_total) : "—"]], C.logs)}
+    ${km && km.rows.length ? `<h3>Documented log messages</h3>
+      <p class="note">Messages described in the CAST documentation of the C and Cpp Analyzer 3.0 (<i>Log messages</i>). <i>Documented level</i> is the one the documentation gives, <i>Seen as</i> the level in this log. ${nfmt(km.documented_lines)} lines belong to documented messages; ${nfmt(km.other_lines)} other warning or error lines have no counterpart in the documentation.</p>
+      ${[...new Set(km.rows.map(r => r.issue))].sort((x, y) => x - y).map(i => `<h4>${esc(km.issues[String(i)] || "")}</h4>
+        ${cppTable([["Message", "title"], ["Documented level", "doc_level"], ["Seen as", r => r.levels.join("/")], ["Lines", "count", "num"], ["Impact", "impact"], ["Resolution", "resolution"]], km.rows.filter(r => r.issue === i))}`).join("")}` : ""}
     <h3>Headers the preprocessor could not find</h3>
     ${cppTable([["Kind", r => kinds[r[0]] || r[0]], ["Headers", r => r[1].headers, "num"], ["Warnings", r => r[1].warnings, "num"]], Object.entries(mh.by_category))}
     <details open><summary>${nfmt(mh.rows.length)} most frequent headers</summary>
